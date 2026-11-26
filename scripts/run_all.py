@@ -155,6 +155,14 @@ def main(quick=False):
         sweep_rows[key] = rows
         write_csv(f"sweep_{key}.csv", rows)
 
+    # ------------------------------------------- extra analyses (within the proposal)
+    step("convergence rates, design space, assumption tornado")
+    conv = [dict(method=k, **studies.convergence_stats(h[:, 2])) for k, h in hist.items()]
+    write_csv("convergence_rates.csv", conv)
+    ds = studies.design_space(p, opt["x"])
+    torn = studies.tornado()
+    write_csv("tornado.csv", torn)
+
     # ================================================================ figures
     step("figures")
     # 1. baseline vs optimum bar comparison (indexed to baseline = 100)
@@ -243,6 +251,45 @@ def main(quick=False):
     ax.legend()
     fig.tight_layout(); fig.savefig(FIG / "fig9_multistart.png"); plt.close(fig)
 
+    # 10. design space: range over (S, AR) with V and W_i at their optimal values
+    fig, ax = plt.subplots(figsize=(6.6, 4.4))
+    cs = ax.contourf(ds["S"], ds["AR"], ds["range_km"], levels=20, cmap="Blues")
+    fig.colorbar(cs, ax=ax, label="Range [km]")
+    ax.contour(ds["S"], ds["AR"], ds["range_km"], levels=20, colors="white", linewidths=0.4, alpha=0.6)
+    bad = np.zeros(ds["S"].shape, bool)
+    for name, col, lab in [("fuel_volume", C[1], "fuel volume limit"), ("stall", C[7], "stall limit")]:
+        g = ds["g"][name]
+        bad |= np.nan_to_num(g, nan=1.0) > 0
+        if np.nanmin(g) < 0 < np.nanmax(g):
+            ax.contour(ds["S"], ds["AR"], g, levels=[0], colors=col, linewidths=2)
+            ax.plot([], [], color=col, lw=2, label=lab)
+    ax.contourf(ds["S"], ds["AR"], bad.astype(float), levels=[0.5, 1.5], colors="none", hatches=["//"])
+    s_line = np.linspace(ds["S"].min(), ds["S"].max(), 200)
+    ax.plot(s_line, 36.0 ** 2 / s_line, color=INK, ls="--", lw=1.3, label="36 m span")
+    ax.plot(opt["design"]["S"], opt["design"]["AR"], "*", ms=16, color="gold", mec=INK, label="optimum")
+    ax.plot(opt36["design"]["S"], opt36["design"]["AR"], "*", ms=12, color=C[2], mec=INK, label="optimum, 36 m span")
+    ax.set_ylim(ds["AR"].min(), ds["AR"].max())
+    ax.set_xlabel("Wing area S [m²]"); ax.set_ylabel("Aspect ratio AR")
+    ax.set_title("Design space at V = Mach limit and W_i = MTOW (hatched = not allowed)", fontsize=9)
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.9, frameon=True)
+    ax.grid(False)
+    fig.tight_layout(); fig.savefig(FIG / "fig10_design_space.png"); plt.close(fig)
+
+    # 11. tornado: range gain when each assumption changes by -10 % / +10 %
+    g0 = 100 * (opt["design"]["range_km"] / base["range_km"] - 1)
+    order = sorted(torn, key=lambda r: abs(r["high_gain_pct"] - r["low_gain_pct"]))
+    fig, ax = plt.subplots(figsize=(6.4, 2.9))
+    for i, r in enumerate(order):
+        ax.barh(i, r["low_gain_pct"] - g0, left=g0, color=C[0], height=0.6, zorder=3, label="−10 %" if i == 0 else None)
+        ax.barh(i, r["high_gain_pct"] - g0, left=g0, color=C[1], height=0.6, zorder=3, label="+10 %" if i == 0 else None)
+    ax.axvline(g0, color=INK, lw=1, zorder=4)
+    ax.set_yticks(range(len(order)), [r["label"] for r in order])
+    ax.set_xlabel("Range gain of the optimum over the 737-800 [%]")
+    fig.suptitle(f"Range gain (nominal {g0:+.1f} %) when each assumption changes by ±10 %",
+                 fontsize=10, fontweight="bold")
+    ax.legend(loc="lower right")
+    fig.tight_layout(); fig.savefig(FIG / "fig11_tornado.png"); plt.close(fig)
+
     # ================================================================ save all numbers
     ok = ra[np.isfinite(ra)]
     results = dict(
@@ -260,7 +307,7 @@ def main(quick=False):
         multistart=dict(n=len(ms), alm_converged=sum(bool(r["alm_converged"]) for r in ms),
                         slsqp_success=sum(bool(r["slsqp_success"]) for r in ms),
                         distinct_ranges_km=sorted(set(np.round(ok, 1).tolist()))),
-        payload_range=pr,
+        payload_range=pr, convergence=conv, tornado=torn,
         sweeps={k: dict(label=sweeps[k][0], rows=sweep_rows[k]) for k in sweeps},
     )
     results["meta"]["run_time_s"] = time.perf_counter() - t0

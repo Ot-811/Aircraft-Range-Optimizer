@@ -186,3 +186,70 @@ def sweep(p: Params, name, values):
                          slsqp_success=r["slsqp_success"]))
         x0 = r["x"]
     return rows
+
+
+def convergence_stats(gnorms):
+    """Measured convergence of one unconstrained run from its gradient norms e_k = ||grad||.
+
+    * order p: if e_{k+1} ~ e_k^p (scaled problem, constant ~1) then p = ln e_{k+1} / ln e_k.
+      Averaged over the last two decreasing steps with e_k < 1e-2.
+      Theory: 1 = linear (gradient descent), between 1 and 2 = superlinear (BFGS, SR1),
+      2 = quadratic (Newton near the solution).
+    * factor: average contraction e_{k+1}/e_k while e goes from 1e-3 to 1e-6 (close to 1 = slow).
+    * iterations until e <= 1e-6.
+    """
+    e = np.asarray(gnorms, float)
+    steps = [k for k in range(len(e) - 1) if e[k] < 1e-2 and 1e-13 < e[k + 1] < e[k]]
+    order = float(np.mean([math.log(e[k + 1]) / math.log(e[k]) for k in steps[-2:]])) if steps else math.nan
+    below = lambda t: next((k for k in range(len(e)) if e[k] <= t), None)  # noqa: E731
+    a, b = below(1e-3), below(1e-6)
+    factor = float((e[b] / e[a]) ** (1 / (b - a))) if a is not None and b is not None and b > a else math.nan
+    return dict(order=order, factor=factor, iterations_to_1e_6=b)
+
+
+def design_space(p: Params, x_opt, n=150, S_lim=(80.0, 200.0), AR_lim=(6.0, 16.0)):
+    """Range over a grid of (S, AR), with V and W_i held at their optimal values (both sit on
+    their limits: Mach and MTOW). W_fuel follows from the weight build-up. Returns the grid,
+    the range [km] (NaN where there is no fuel) and the constraint values g (<= 0 is allowed)."""
+    m = AircraftModel(p)
+    V, Wi = x_opt[2], x_opt[4]
+    S, AR = np.meshgrid(np.linspace(*S_lim, n), np.linspace(*AR_lim, n))
+    Wf = Wi - p.W_fixed - p.k_w * S ** p.a * AR ** p.b * Wi ** p.c - p.W_res - p.W_pay
+    R = np.full(S.shape, np.nan)
+    G = {name: np.full(S.shape, np.nan) for name in m.ineq_names}
+    for idx in np.ndindex(S.shape):
+        x = (S[idx], AR[idx], V, Wf[idx], Wi)
+        if Wf[idx] > 0:
+            R[idx] = m.range_km(x)
+            for name, g in zip(m.ineq_names, m.g(x)):
+                G[name][idx] = g
+    return dict(S=S, AR=AR, range_km=R, g=G)
+
+
+# Modelling assumptions varied in the tornado study: (Params attribute, label, relative change)
+TORNADO_PARAMS = [("CD0", "Zero-lift drag C_D0"), ("e", "Oswald efficiency e"),
+                  ("CLmax", "Landing C_L,max"), ("W_res", "Reserve fuel"),
+                  ("W_pay", "Payload (passenger mass)")]
+
+
+def tornado(rel=0.10):
+    """Change each assumed value by -rel and +rel and recompute the range GAIN of the optimum over
+    the 737-800 (both flown with the same assumptions). Model constants (C_D0, e, reserve) are
+    re-calibrated, exactly as the nominal model is; the payload is a mission input."""
+    from .params import calibrated_params
+    nominal = calibrated_params()
+    rows = []
+    for name, label in TORNADO_PARAMS:
+        out = dict(parameter=name, label=label)
+        for side, f in (("low", 1 - rel), ("high", 1 + rel)):
+            p = calibrated_params(**{name: getattr(nominal, name) * f})
+            m = AircraftModel(p)
+            x737 = fly_fixed_geometry(p, baseline_x(nominal), p.W_pay)   # the real 737 wing and tanks
+            r = optimize(p, check=True)
+            out[f"{side}_gain_pct"] = 100 * (r["design"]["range_km"] / m.range_km(x737) - 1)
+            out[f"{side}_range_km"] = r["design"]["range_km"]
+            out[f"{side}_737_feasible"] = bool(np.all(m.g(x737) <= 1e-9))
+            out[f"{side}_active"] = ";".join(r["active"])
+            out[f"{side}_ok"] = bool(r["alm"].converged and r["slsqp_success"] and r["rel_diff_vs_slsqp"] < 1e-5)
+        rows.append(out)
+    return rows

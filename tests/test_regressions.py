@@ -52,3 +52,33 @@ def test_demo_end_to_end(tmp_path, monkeypatch):
     assert R["checks"]["slsqp_range_km"] == pytest.approx(R["optimum"]["range_km"], abs=0.1)
     assert R["b737"]["range_km"] == pytest.approx(5436.0, abs=1.0)              # the real 737-800
     assert (tmp_path / "t" / "report.md").is_file()
+
+
+# --------------------------------------------------------------------------- new analyses
+def test_convergence_order_on_known_sequences():
+    from aircraft_opt.studies import convergence_stats
+    linear = [0.5 ** k for k in range(40)]                 # e_{k+1} = e_k / 2
+    quadratic = [1e-1, 1e-2, 1e-4, 1e-8]                  # e_{k+1} = e_k^2
+    assert convergence_stats(linear)["order"] == pytest.approx(1.0, abs=0.1)
+    assert convergence_stats(linear)["factor"] == pytest.approx(0.5)
+    assert convergence_stats(quadratic)["order"] == pytest.approx(2.0)
+
+
+def test_design_space_optimum_is_best_allowed_grid_point():
+    from aircraft_opt.studies import design_space, optimize
+    p = calibrated_params()
+    opt = optimize(p, check=False)
+    ds = design_space(p, opt["x"], n=60)
+    # Mach and MTOW sit exactly on their limits on this slice, hence the 1e-6 tolerance
+    allowed = np.all([np.nan_to_num(g, nan=1.0) <= 1e-6 for g in ds["g"].values()], axis=0)
+    assert allowed.sum() > 100
+    assert np.nanmax(np.where(allowed, ds["range_km"], np.nan)) <= opt["design"]["range_km"] + 1e-6
+
+
+def test_cd0_and_e_are_equivalent_after_calibration():
+    """Only C_D0*e matters once c_T is calibrated, so scaling either by 0.9 gives the same optimum."""
+    from aircraft_opt.studies import optimize
+    p = calibrated_params()
+    r1 = optimize(calibrated_params(CD0=0.9 * p.CD0), check=False)["design"]["range_km"]
+    r2 = optimize(calibrated_params(e=0.9 * p.e), check=False)["design"]["range_km"]
+    assert r1 == pytest.approx(r2, rel=1e-8)

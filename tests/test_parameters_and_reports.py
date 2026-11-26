@@ -61,4 +61,4 @@ def test_inner_methods_never_hit_iteration_cap(span, method):
 def test_latex_escaping():
     s = latex_inline("**W_fuel** ≤ 50 % of μ·S²")
     assert s == r"\textbf{W\_fuel} $\le$ 50 \% of $\mu$$\cdot$S\textsuperscript{2}"
-    assert "?" not in latex_inline("λ ← max(0, λ + μ g), ½ ρ₀ V²")
+    assert "?" not in latex_inline("λ ← max(0, λ + μ g), ½ ρ₀ V², eₖ₊₁")

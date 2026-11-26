@@ -16,7 +16,7 @@ The full, auto-generated report is [`results/report.md`](results/report.md) (als
 | | Main study | Demo (for the viva) |
 |---|---|---|
 | Run | `python scripts/run_all.py` | `python scripts/demo.py` |
-| What it does | every study in the proposal: optimum, solver comparison, KKT + sensitivities, multi-start, payload-range, 4 parameter sweeps | asks for your requirements and **your own starting design**, optimises it and checks the result |
+| What it does | every study in the proposal: optimum, solver comparison with measured convergence rates, KKT + sensitivities, multi-start, payload-range, 4 parameter sweeps; plus a design-space picture and a ±10 % assumption (tornado) study | asks for your requirements and **your own starting design**, optimises it and checks the result |
 | Output | `results/` (tables, figures, `results.json`) | `demo_reports/<run name>/` |
 | Report | `results/report.md` + `.pdf`, built by `scripts/main_report.py` | `demo_reports/<name>/report.md` + `.pdf`, built by `scripts/demo_report.py` |
 | Rebuild only the report | `python scripts/main_report.py` | `python scripts/demo_report.py demo_reports/<name>` |
@@ -30,7 +30,7 @@ it you still get the Markdown report and the `.tex` file.
 
 ```bash
 pip install -r requirements.txt
-python -m pytest                     # 23 tests, a few seconds
+python -m pytest                     # 26 tests, a few seconds
 python scripts/run_all.py            # full study + report, about 1-2 min (--quick: about 35 s)
 python scripts/demo.py               # interactive demo; Enter keeps the 737-800 value
 python scripts/demo.py --defaults    # demo with no questions (run name 'demo')
@@ -64,7 +64,7 @@ scripts/
   demo_report.py    demo report <- demo_reports/<name>/results.json
 tests/              gradient checks, published-data conversions, ISA, calibration,
                     custom-vs-SLSQP agreement, KKT, solver convergence, LaTeX escaping,
-                    regression tests for fixed bugs, end-to-end demo run
+                    regression tests for fixed bugs, end-to-end demo run, new analyses
 docs/assumptions.md every assumed value, and how each published value was checked
 docs/viva_guide.md  how the code fits together, and likely viva questions with answers
 ```

@@ -1,0 +1,6 @@
+parameter,label,low_gain_pct,low_range_km,low_737_feasible,low_active,low_ok,high_gain_pct,high_range_km,high_737_feasible,high_active,high_ok
+CD0,Zero-lift drag C_D0,6.11834,5768.19,True,mtow;fuel_volume;mach,True,4.10522,5658.76,True,mtow;fuel_volume;mach,True
+e,Oswald efficiency e,6.11834,5768.19,True,mtow;fuel_volume;mach,True,4.10522,5658.76,True,mtow;fuel_volume;mach,True
+CLmax,"Landing C_L,max",4.96008,5705.23,False,mtow;fuel_volume;mach,True,4.96008,5705.23,True,mtow;fuel_volume;mach,True
+W_res,Reserve fuel,4.98907,5706.81,True,mtow;fuel_volume;mach,True,4.93204,5703.71,True,mtow;fuel_volume;mach,True
+W_pay,Payload (passenger mass),10.3773,6126.2,True,mtow;fuel_volume;mach,True,4.64192,5283.97,True,mtow;fuel_volume;mach,True

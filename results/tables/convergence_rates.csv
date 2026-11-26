@@ -1,0 +1,6 @@
+method,order,factor,iterations_to_1e_6
+gd,1.04741,0.99084,1158
+newton,2.15639,nan,4
+modnewton,2.15639,nan,4
+bfgs,1.22413,0.128275,28
+sr1,1.38051,0.055106,20

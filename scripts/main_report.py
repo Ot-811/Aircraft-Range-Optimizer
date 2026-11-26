@@ -158,6 +158,13 @@ def build_main_report(res_dir=ROOT / "results") -> str:
     else:
         notes.append("WARNING: SLSQP did not report success for one of the optima, so the cross-check is incomplete.")
     r.bullets(notes)
+    r.figure(fig / "fig10_design_space.png", "Range over wing area and aspect ratio with V and W_i at their "
+             "optimal values (Mach limit, MTOW). Hatched designs break a constraint.", width=0.75)
+    r.para("Why the optimum sits where it does: range keeps rising towards a bigger, more slender wing, "
+           "but the fuel that the MTOW allows no longer fits in the tanks (fuel-volume line). The best "
+           "allowed design is where the range contours just touch that line. The 36 m span limit (dashed) "
+           "cuts the allowed region and moves the optimum along the fuel-volume line. This picture is a "
+           "2-D slice; the solver works in all 5 variables.")
 
     # ------------------------------------------------------------------ 6. analysis
     r.heading("Analysis")
@@ -217,6 +224,34 @@ def build_main_report(res_dir=ROOT / "results") -> str:
            f"to {fmt(rh[-1]['range_km'])} km and the optimal AR from {rh[0]['AR']:.1f} to {rh[-1]['AR']:.1f}: "
            "thinner air needs a higher C_L, so induced drag matters more and span pays off. The model has no "
            "thrust lapse or buffet limit, so read this as 'what span is worth at a given altitude'.")
+
+    tn = R["tornado"]
+    g_all = [x[f"{s}_gain_pct"] for x in tn for s in ("low", "high")]
+    r.heading("How much do the assumptions matter?", 2)
+    r.figure(fig / "fig11_tornado.png", "Range gain over the 737-800 when each assumed value changes by ±10 %.",
+             width=0.75)
+    r.table(["Assumption", "Gain at −10 %", "Gain at +10 %", "All runs verified"],
+            [[x["label"], f"{x['low_gain_pct']:+.2f} %", f"{x['high_gain_pct']:+.2f} %",
+              "yes" if x["low_ok"] and x["high_ok"] else "NO"] for x in tn])
+    tn_by = {x["parameter"]: x for x in tn}
+    same = (abs(tn_by["CD0"]["low_gain_pct"] - tn_by["e"]["low_gain_pct"]) < 1e-6
+            and abs(tn_by["CD0"]["high_gain_pct"] - tn_by["e"]["high_gain_pct"]) < 1e-6)
+    tips = [f"The gain stays between {min(g_all):+.1f} % and {max(g_all):+.1f} %"
+            + (", so **the optimised wing beats the 737 under every change**." if min(g_all) > 0 else
+               ". **Under some changes the optimised wing does not beat the 737.**")]
+    if same:
+        tips.append("C_D0 and e give exactly the same result. L/D = C_L / (C_D0 + C_L²/(π e AR)) "
+                    "= e · C_L / (C_D0·e + C_L²/(π AR)). Apart from the constant factor e, which the c_T "
+                    "calibration absorbs, only the product C_D0·e appears, so −10 % on either one gives the "
+                    "same product and the same optimum.")
+    tips.append("The payload (passenger mass) matters most: with less payload the optimised wing's larger tanks "
+                "are worth more, because the 737 is then limited by its tank size.")
+    if tn_by["CLmax"]["low_gain_pct"] == tn_by["CLmax"]["high_gain_pct"] or abs(
+            tn_by["CLmax"]["low_gain_pct"] - tn_by["CLmax"]["high_gain_pct"]) < 1e-6:
+        tips.append("C_L,max does not change the optimum, because the stall limit is not active there"
+                    + (" (with −10 % the 737-800 itself would break the stall limit)."
+                       if not tn_by["CLmax"]["low_737_feasible"] else "."))
+    r.bullets(tips)
 
     # ------------------------------------------------------------------ 7. KKT
     r.heading("KKT conditions and multipliers as sensitivities")
@@ -290,6 +325,23 @@ def build_main_report(res_dir=ROOT / "results") -> str:
     obs.append("**SLSQP** is fastest in wall time: it is compiled code and solves the 5-variable problem directly.")
     r.bullets(obs)
 
+    THEORY = {"gd": ("linear (p = 1)", "1"), "newton": ("quadratic (p = 2)", "2"),
+              "modnewton": ("quadratic near the solution", "2"), "bfgs": ("superlinear (1 < p < 2)", "1-2"),
+              "sr1": ("superlinear (1 < p < 2)", "1-2")}
+    r.heading("Measured convergence rates", 2)
+    r.para("On the same first ALM subproblem, the gradient norm eₖ = ‖∇L_A‖ is recorded at every iteration. "
+           "If eₖ₊₁ ≈ eₖ^p then p = ln eₖ₊₁ / ln eₖ (averaged over the last two steps). The contraction factor "
+           "is the average eₖ₊₁/eₖ while e falls from 10⁻³ to 10⁻⁶ (close to 1 means slow).")
+    r.table(["Method", "Theory", "Measured order p", "Contraction factor", "Iterations to 10⁻⁶"],
+            [[METHOD_NAMES.get(c["method"], c["method"]), THEORY[c["method"]][0],
+              f"{c['order']:.2f}" if c["order"] == c["order"] else "-",
+              f"{c['factor']:.3f}" if c["factor"] == c["factor"] else "- (skips the window)",
+              c["iterations_to_1e_6"] if c["iterations_to_1e_6"] is not None else "not reached"]
+             for c in R["convergence"]])
+    r.para("The measured orders match the theory from the lectures: gradient descent is linear with a "
+           "contraction factor close to 1, BFGS and SR1 are superlinear, and Newton is quadratic "
+           "(it jumps over the 10⁻³-10⁻⁶ window in one step).")
+
     # ------------------------------------------------------------------ 9. multistart
     ms = R["multistart"]
     r.heading("Multi-start")
@@ -312,6 +364,28 @@ def build_main_report(res_dir=ROOT / "results") -> str:
     else:
         r.para(f"All {len(runs)} optimisations inside the payload-range and sweep studies converged, and each "
                "agrees with SLSQP to better than 10⁻⁵ (relative, in x).")
+
+    # ------------------------------------------------------------------ proposal
+    r.heading("Differences from the proposal")
+    r.para("Everything the proposal promised is delivered. These are the implementation choices the proposal "
+           "did not fix, stated explicitly:")
+    r.bullets([
+        f"**Effective c_T.** The proposal compares the predicted and published range: with the literature TSFC "
+        f"the model over-predicts by {cal['prediction_error_pct']:+.1f} %. We then also fit an effective c_T so "
+        "the 737-800 matches exactly. This does not change any optimal design (c_T only adds the constant "
+        "ln c_T to −ln R).",
+        "**Cruise density from altitude.** The proposal lists ρ as a fixed parameter. We compute it from the "
+        "standard atmosphere (ISA) so that the promised cruise-altitude study has something to vary.",
+        "**Raymer area exponent 0.749.** Raymer's wing formula also contains the control-surface area; taking it "
+        "proportional to S adds 0.1 to the area exponent (0.649 + 0.1). Same formula, written in the "
+        "proposal's form.",
+        "**Newton Hessian.** Gradients are analytic as proposed; the Hessian for Newton and modified Newton is "
+        "a central difference of the analytic gradient.",
+        "**Values the proposal left open** (M_max = 0.80, reserve fuel, C_D0, e, C_L,max, bounds) are listed "
+        "with reasons in docs/assumptions.md.",
+        "**Additions** that stay inside the proposal's scope: the design-space picture, the assumption "
+        "(tornado) study, measured convergence rates, the convergence audit and the interactive demo.",
+    ])
 
     # ------------------------------------------------------------------ 10. limitations
     r.heading("Limitations")
