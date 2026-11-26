@@ -1,0 +1,7 @@
+parameter,unit,value,dR_dp_km_per_unit,predicted_dR_km,resolved_dR_km,elasticity
+MTOW,kg,79016,0.181382,143.321,141.955,2.53013
+M_max,-,0.8,3860.36,30.8829,29.7469,0.545195
+k_f,fuel-volume coeff.,46.016,41.9906,19.3224,19.2421,0.34111
+W_pay,kg,16200,-0.258267,-41.8392,-41.8353,-0.738614
+V_stall_max,m/s,64,-0,-0,3.91459e-07,-0
+b_max,m,36,24.5957,8.85445,8.33621,0.156313

@@ -1,0 +1,13 @@
+{
+  "published_range_km": 5435.62,
+  "predicted_range_lit_cT_km": 6067.69739938152,
+  "prediction_error_pct": 11.628432439749648,
+  "cT_literature_lb_per_lbf_h": 0.627,
+  "cT_effective_lb_per_lbf_h": 0.6999102713972303,
+  "k_w": 0.09362461216568961,
+  "W_fixed_kg": 35725.19350508275,
+  "W_wing_737_kg": 5687.806494917245,
+  "k_f": 46.01595861169869,
+  "rho_cruise": 0.3795968196295939,
+  "a_cruise": 296.53541125899955
+}

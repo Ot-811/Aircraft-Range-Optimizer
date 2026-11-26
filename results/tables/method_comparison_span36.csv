@@ -1,0 +1,7 @@
+method,converged,outer_it,inner_it,f_evals,grad_evals,hess_evals,fallbacks,time_s,range_km,max_rel_err_vs_slsqp,max_violation
+gd,True,10,16903,474907,16913,0,0,11.7431,5664.56,5.26024e-09,7.02228e-10
+newton,True,9,22,45,207,22,1,0.0101849,5664.56,1.96177e-08,4.93443e-09
+modnewton,True,9,3020,63021,27189,3020,0,2.39984,5664.56,1.96188e-08,4.93472e-09
+bfgs,True,9,193,344,202,0,0,0.0212491,5664.56,1.96486e-08,4.94006e-09
+sr1,True,9,86,402,95,0,0,0.016892,5664.56,1.95974e-08,4.92931e-09
+SLSQP (SciPy),True,4,nan,4,4,0,0,0.0005018,5664.56,0,5.77316e-15

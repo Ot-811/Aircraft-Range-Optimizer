@@ -1,0 +1,135 @@
+"""Conceptual aircraft model: Breguet range, drag polar, weight build-up and constraints.
+
+Full design vector x = (S, AR, V, W_fuel, W_i) with S [m^2], V [m/s], weights as masses [kg].
+All functions return analytic gradients / Jacobians.
+
+Objective:   f(x) = -ln R(x),  R = V/c_T * (C_L/C_D) * ln(W_i/(W_i - W_fuel))   [R in km]
+Equality:    h(x) = (W_fixed + k_w S^a AR^b W_i^c + W_fuel + W_res + W_pay)/W_i - 1 = 0
+Inequalities (normalised, g <= 0):
+    mtow         W_i/MTOW - 1
+    stall        (W_i g / S) / (0.5 rho0 V_stall^2 CLmax) - 1
+    fuel_volume  (W_fuel + W_res) sqrt(AR) / (k_f S^1.5) - 1
+    mach         V / (M_max a) - 1
+    span         sqrt(S AR)/b_max - 1          (only if b_max is set)
+plus simple bounds lb <= x <= ub.
+"""
+from __future__ import annotations
+
+import math
+import numpy as np
+
+from .atmosphere import G0
+from .params import Params
+
+VAR_NAMES = ("S", "AR", "V", "W_fuel", "W_i")
+
+
+class AircraftModel:
+    def __init__(self, p: Params):
+        self.p = p
+        self.rho = p.rho
+        self.a_snd = p.a_sound
+        self.q_stall = 0.5 * p.rho0 * p.V_stall_max ** 2 * p.CLmax
+        self.ineq_names = ["mtow", "stall", "fuel_volume", "mach"] + (["span"] if p.b_max else [])
+        self.lb = np.array(p.lb, float)
+        self.ub = np.array(p.ub, float)
+
+    # ------------------------------------------------------------------ aero
+    def aero(self, x):
+        S, AR, V, Wf, Wi = x
+        p = self.p
+        q = 0.5 * self.rho * V ** 2
+        CL = Wi * G0 / (q * S)
+        k = 1.0 / (math.pi * p.e * AR)
+        CD = p.CD0 + k * CL ** 2
+        return CL, CD, k
+
+    def wing_mass(self, x):
+        S, AR, V, Wf, Wi = x
+        p = self.p
+        return p.k_w * S ** p.a * AR ** p.b * Wi ** p.c
+
+    def in_domain(self, x):
+        S, AR, V, Wf, Wi = x
+        return S > 0 and AR > 0 and V > 0 and 0 < Wf < Wi
+
+    # ------------------------------------------------------------- objective
+    def range_km(self, x):
+        S, AR, V, Wf, Wi = x
+        CL, CD, _ = self.aero(x)
+        return V / self.p.cT * (CL / CD) * math.log(Wi / (Wi - Wf)) / 1000.0
+
+    def f(self, x):
+        if not self.in_domain(x):
+            return math.inf
+        return -math.log(self.range_km(x))
+
+    def grad_f(self, x):
+        S, AR, V, Wf, Wi = x
+        CL, CD, k = self.aero(x)
+        B = math.log(Wi / (Wi - Wf))
+        dlnE_dCL = 1.0 / CL - 2.0 * k * CL / CD
+        dlnE_dk = -CL ** 2 / CD
+        g = np.empty(5)
+        g[0] = -dlnE_dCL * (-CL / S)
+        g[1] = -dlnE_dk * (-k / AR)
+        g[2] = -1.0 / V - dlnE_dCL * (-2.0 * CL / V)
+        g[3] = -(1.0 / B) / (Wi - Wf)
+        g[4] = -dlnE_dCL * (CL / Wi) - (1.0 / B) * (1.0 / Wi - 1.0 / (Wi - Wf))
+        return g
+
+    # ----------------------------------------------------------- constraints
+    def h(self, x):
+        S, AR, V, Wf, Wi = x
+        p = self.p
+        return (p.W_fixed + self.wing_mass(x) + Wf + p.W_res + p.W_pay) / Wi - 1.0
+
+    def jac_h(self, x):
+        S, AR, V, Wf, Wi = x
+        p = self.p
+        Ww = self.wing_mass(x)
+        tot = p.W_fixed + Ww + Wf + p.W_res + p.W_pay
+        return np.array([p.a * Ww / S / Wi, p.b * Ww / AR / Wi, 0.0, 1.0 / Wi,
+                         p.c * Ww / Wi / Wi - tot / Wi ** 2])
+
+    def g(self, x):
+        S, AR, V, Wf, Wi = x
+        p = self.p
+        out = [Wi / p.MTOW - 1.0,
+               Wi * G0 / (S * self.q_stall) - 1.0,
+               (Wf + p.W_res) * math.sqrt(AR) / (p.k_f * S ** 1.5) - 1.0,
+               V / (p.M_max * self.a_snd) - 1.0]
+        if p.b_max:
+            out.append(math.sqrt(S * AR) / p.b_max - 1.0)
+        return np.array(out)
+
+    def jac_g(self, x):
+        S, AR, V, Wf, Wi = x
+        p = self.p
+        J = np.zeros((len(self.ineq_names), 5))
+        J[0, 4] = 1.0 / p.MTOW
+        st = Wi * G0 / (S * self.q_stall)
+        J[1, 0] = -st / S
+        J[1, 4] = G0 / (S * self.q_stall)
+        Q = (Wf + p.W_res) * math.sqrt(AR) / (p.k_f * S ** 1.5)
+        J[2, 0] = -1.5 * Q / S
+        J[2, 1] = 0.5 * Q / AR
+        J[2, 3] = Q / (Wf + p.W_res)
+        J[3, 2] = 1.0 / (p.M_max * self.a_snd)
+        if p.b_max:
+            s = math.sqrt(S * AR) / p.b_max
+            J[4, 0] = 0.5 * s / S
+            J[4, 1] = 0.5 * s / AR
+        return J
+
+    # ----------------------------------------------------------------- report
+    def describe(self, x):
+        S, AR, V, Wf, Wi = map(float, x)
+        CL, CD, _ = self.aero(x)
+        p = self.p
+        return dict(S=S, AR=AR, span=math.sqrt(S * AR), V=V, Mach=V / self.a_snd,
+                    W_fuel=Wf, W_i=Wi, W_wing=self.wing_mass(x), CL=CL, CD=CD, LD=CL / CD,
+                    WS=Wi * G0 / S, V_stall=math.sqrt(2 * Wi * G0 / (p.rho0 * S * p.CLmax)),
+                    fuel_capacity=p.k_f * S ** 1.5 / math.sqrt(AR),
+                    range_km=self.range_km(x), h_resid=self.h(x),
+                    **{f"g_{n}": float(v) for n, v in zip(self.ineq_names, self.g(x))})
