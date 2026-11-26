@@ -17,20 +17,23 @@ NMI = 1.852  # km
 
 
 # ---------------------------------------------------------------------------
-# Published Boeing 737-800 data (Boeing airport-planning document / public specs)
+# Published Boeing 737-800 data (Boeing airport-planning document / public specs).
+# Checked Nov 2026 against the Boeing 737NG specification values quoted on Wikipedia
+# ("Boeing 737 Next Generation", specifications + comparison table).
 # ---------------------------------------------------------------------------
 B737 = dict(
-    MTOW=79_016.0,          # kg, maximum take-off weight
-    MZFW=62_732.0,          # kg, maximum zero-fuel weight
-    OEW=41_413.0,           # kg, operating empty weight
-    fuel_capacity_L=26_020.0,  # L, usable fuel (wing + centre tanks)
-    S=124.6,                # m^2, reference wing area
-    span=34.32,             # m, span without winglets
-    M_cruise=0.785,         # typical cruise Mach
-    h_cruise_ft=35_000.0,   # typical cruise altitude
-    range_nmi=2_935.0,      # published range, 162 passengers (two-class)
+    MTOW=79_016.0,          # kg (174,200 lb), maximum take-off weight                     [published]
+    MZFW=62_732.0,          # kg (138,300 lb), maximum zero-fuel weight                     [published]
+    OEW=41_413.0,           # kg (91,300 lb), operating empty weight                        [published]
+    fuel_capacity_L=26_020.0,  # L (6,875 US gal), usable fuel (wing + centre tanks)        [published]
+    S=124.6,                # m^2 (1,341 ft^2), reference wing area                         [published]
+    span=34.32,             # m (112 ft 7 in), span without winglets                        [published]
+    M_cruise=0.785,         # typical cruise Mach (MMO is 0.82)                             [published]
+    h_cruise_ft=35_000.0,   # typical cruise altitude                                       [typical]
+    range_nmi=2_935.0,      # range with 162 passengers (two-class)                         [published]
     pax=162,
-    TSFC_cruise=0.627,      # lb/(lbf h), CFM56-7B cruise TSFC (public literature value)
+    TSFC_cruise=0.627,      # lb/(lbf h), CFM56-7B cruise TSFC. Literature range 0.60-0.65;
+                            # only the starting point of the c_T calibration                [literature]
 )
 B737["AR"] = B737["span"] ** 2 / B737["S"]
 B737["range_km"] = B737["range_nmi"] * NMI
@@ -38,13 +41,15 @@ B737["range_km"] = B737["range_nmi"] * NMI
 FUEL_DENSITY = 0.80  # kg/L, Jet A-1 (ASSUMED typical value)
 
 
-def raymer_transport_wing_mass(Wdg_kg, S_m2, AR, n_ult=3.75, tc=0.12, taper=0.27,
+def raymer_transport_wing_mass(Wdg_kg, S_m2, AR, n_ult=3.75, tc=0.12, taper=0.278,
                                sweep_deg=25.0, Scs_frac=0.10):
     """Raymer (Aircraft Design, eq. 15.25) transport wing weight, returned in kg.
 
     W = 0.0051 (Wdg Nz)^0.557 Sw^0.649 A^0.5 (t/c)^-0.4 (1+lambda)^0.1 cos(L)^-1 Scs^0.1
     in lb / ft^2 units. Control-surface area Scs is taken proportional to Sw, which
     makes the overall area exponent 0.749.
+    737-800 inputs: n_ult = 1.5 x 2.5 g limit load; taper 0.278 and 25 deg quarter-chord sweep
+    (published 737NG planform); t/c = 0.12 is an ASSUMED average (root is thicker).
     """
     Wdg = Wdg_kg / LB
     Sw = S_m2 / FT2
@@ -103,7 +108,8 @@ class Params:
 def baseline_x(p: Params):
     """The 737-800 reference design as a point x = (S, AR, V, W_fuel, W_i) in model variables.
 
-    It is flown with full tanks: total fuel = tank capacity, of which W_res is reserve.
+    It is flown with full tanks: total fuel = tank capacity, of which W_res is reserve,
+    and carries the payload p.W_pay (162 pax by default).
     """
     cap = B737["fuel_capacity_L"] * FUEL_DENSITY
     Wi = B737["OEW"] + p.W_pay + cap
@@ -120,17 +126,50 @@ def calibrated_params(calibrate_cT: bool = True, **overrides) -> Params:
     * c_T : (optional) effective cruise c_T that makes the Breguet range of the baseline
             equal the published range. It absorbs taxi/climb/descent fuel, winglets and
             all other effects the simplified model leaves out.
+
+    The calibration always flies the 737-800's own mission (162 pax, published MTOW, FL350).
+    Overrides of the mission (W_pay, MTOW, h_cruise, ...) are applied AFTER calibrating, so
+    they ask "what if" questions instead of silently re-fitting the constants. Overrides of
+    model constants (CD0, e, W_res, exponents) are used in the calibration.
     """
     p = Params(**overrides)
+    ref = p.with_(W_pay=Params.W_pay, MTOW=B737["MTOW"], h_cruise=Params.h_cruise)   # 737 mission
     S, AR = B737["S"], B737["AR"]
     W_wing = raymer_transport_wing_mass(B737["MTOW"], S, AR)
     cap = B737["fuel_capacity_L"] * FUEL_DENSITY
-    Wi0 = B737["OEW"] + p.W_pay + cap
-    k_w = W_wing / (S ** p.a * AR ** p.b * Wi0 ** p.c)
-    k_f = cap / (S ** 1.5 / math.sqrt(AR))
-    p = p.with_(k_w=k_w, W_fixed=B737["OEW"] - W_wing, k_f=k_f)
+    Wi0 = B737["OEW"] + ref.W_pay + cap
+    consts = dict(k_w=W_wing / (S ** ref.a * AR ** ref.b * Wi0 ** ref.c),
+                  W_fixed=B737["OEW"] - W_wing,
+                  k_f=cap / (S ** 1.5 / math.sqrt(AR)))
     if calibrate_cT and "cT" not in overrides:
         from .model import AircraftModel
-        R_pred = AircraftModel(p).range_km(baseline_x(p))
-        p = p.with_(cT=p.cT * R_pred / B737["range_km"])
-    return p
+        ref = ref.with_(**consts)
+        R_pred = AircraftModel(ref).range_km(baseline_x(ref))
+        consts["cT"] = ref.cT * R_pred / B737["range_km"]
+    return p.with_(**consts)
+
+
+# ---------------------------------------------------------------------------
+# Where every model parameter comes from (printed in the reports).
+#   published  = Boeing / engine data          assumed    = our choice, see docs/assumptions.md
+#   calibrated = fitted so the model reproduces the 737-800        physics = standard constant
+# ---------------------------------------------------------------------------
+PARAMETER_SOURCES = [
+    # (attribute of Params, description, unit, factor to display unit, source)
+    ("MTOW", "Maximum take-off mass", "kg", 1.0, "published (737-800)"),
+    ("W_pay", "Payload: 162 pax x 100 kg", "kg", 1.0, "assumed (standard pax + bag mass)"),
+    ("W_res", "Reserve fuel (carried, not burnt)", "kg", 1.0, "assumed"),
+    ("CD0", "Zero-lift drag coefficient", "-", 1.0, "assumed (typical narrow-body)"),
+    ("e", "Oswald efficiency", "-", 1.0, "assumed (typical swept wing)"),
+    ("CLmax", "Max lift coefficient, landing flaps", "-", 1.0, "assumed (flapped narrow-body)"),
+    ("V_stall_max", "Maximum allowed stall speed", "m/s", 1.0, "assumed (737 baseline = 62.3 m/s fits)"),
+    ("M_max", "Mach limit (replaces wave drag)", "-", 1.0, "assumed (between cruise 0.785 and MMO 0.82)"),
+    ("h_cruise", "Cruise altitude", "ft", 1 / FT, "typical 737 cruise"),
+    ("cT", "Effective cruise TSFC", "lb/(lbf h)", 3600.0, "calibrated (literature 0.627)"),
+    ("a", "Wing-mass exponent on S", "-", 1.0, "Raymer eq. 15.25 (0.649 + 0.1 from S_cs)"),
+    ("b", "Wing-mass exponent on AR", "-", 1.0, "Raymer eq. 15.25"),
+    ("c", "Wing-mass exponent on W_i", "-", 1.0, "Raymer eq. 15.25"),
+    ("k_w", "Wing-mass coefficient", "-", 1.0, "calibrated (Raymer mass at 737 geometry)"),
+    ("W_fixed", "Fixed mass (OEW minus wing)", "kg", 1.0, "calibrated (published OEW)"),
+    ("k_f", "Fuel-volume coefficient", "kg/m^3", 1.0, "calibrated (published tank capacity)"),
+]

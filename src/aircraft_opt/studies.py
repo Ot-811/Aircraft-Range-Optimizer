@@ -8,8 +8,8 @@ import numpy as np
 from .params import Params, baseline_x, B737, FUEL_DENSITY
 from .model import AircraftModel
 from .problems import ReducedProblem
-from .alm import solve_alm
-from .unconstrained import METHODS
+from .alm import solve_alm, augmented_lagrangian
+from .unconstrained import METHODS, minimize
 from .reference import solve_slsqp, kkt_check, lagrangian_param_sensitivity
 
 
@@ -23,6 +23,7 @@ def optimize(p: Params, x0=None, method="bfgs", check=True):
     if check:
         s = solve_slsqp(p, x0)
         out["slsqp"] = s
+        out["slsqp_success"] = s.success
         out["rel_diff_vs_slsqp"] = float(np.abs(x / s.x - 1).max())
     return out
 
@@ -47,50 +48,48 @@ def method_comparison(p: Params, x0=None):
                          f_evals=r.nf, grad_evals=r.ng, hess_evals=r.nh, fallbacks=r.fallbacks,
                          time_s=r.time_s, range_km=AircraftModel(p).range_km(x),
                          max_rel_err_vs_slsqp=float(np.abs(x / s.x - 1).max()),
-                         max_violation=r.max_violation, history=r.history))
+                         max_violation=r.max_violation,
+                         inner_cap_hits=sum(not h["inner_converged"] for h in r.history),
+                         history=r.history))
     rows.append(dict(method="SLSQP (SciPy)", converged=s.success, outer_it=s.nit, inner_it=np.nan,
                      f_evals=s.nfev, grad_evals=s.njev, hess_evals=0, fallbacks=0, time_s=s.time_s,
                      range_km=AircraftModel(p).range_km(s.x), max_rel_err_vs_slsqp=0.0,
                      max_violation=float(max(abs(AircraftModel(p).h(s.x)), AircraftModel(p).g(s.x).max(), 0)),
-                     history=[]))
+                     inner_cap_hits=0, history=[]))
     return rows
 
 
 def inner_histories(p: Params, x0=None, mu=10.0):
-    """Convergence of each unconstrained method on the SAME first ALM subproblem (lam=0, mu)."""
-    from .unconstrained import minimize
+    """Convergence of each unconstrained method on the SAME first ALM subproblem (lam = 0, mu)."""
     x0 = baseline_x(p) if x0 is None else x0
     rp = ReducedProblem(p)
-    lam = np.zeros(len(rp.ineq(rp.z_from_x(x0))))
-
-    def LA(z):
-        fz = rp.f(z)
-        if not np.isfinite(fz):
-            return np.inf
-        return fz + (np.maximum(0.0, lam + mu * rp.ineq(z)) ** 2 - lam ** 2).sum() / (2 * mu)
-
-    def gLA(z):
-        return rp.grad(z) + rp.jac_ineq(z).T @ np.maximum(0.0, lam + mu * rp.ineq(z))
-
+    z0 = rp.z_from_x(x0)
+    LA, grad_LA = augmented_lagrangian(rp, np.zeros(len(rp.ineq(z0))), np.zeros(0), mu)
     out = {}
     for mth in METHODS:
-        r = minimize(LA, gLA, rp.z_from_x(x0), method=mth, gtol=1e-10, maxiter=4000, record=True)
+        r = minimize(LA, grad_LA, z0, method=mth, gtol=1e-10, maxiter=4000, record=True)
         out[mth] = np.array(r.history)
     return out
 
 
-def latin_hypercube_starts(p: Params, n, seed=0):
-    """Random starting points (S, AR, V, W_i) by Latin hypercube, kept only if fuel > 0."""
+def latin_hypercube_starts(p: Params, n, seed=0, max_batches=50):
+    """Random starting points (S, AR, V, W_i) by Latin hypercube, kept only if the fuel left by the
+    weight build-up is above its lower bound. W_i is drawn from 60 t (lighter aircraft cannot carry
+    the 737 payload plus fuel) to its upper bound. Raises if no such point exists."""
     rng = np.random.default_rng(seed)
     rp = ReducedProblem(p)
     lo = np.array([p.lb[0], p.lb[1], p.lb[2], 60_000.0])
     hi = np.array([p.ub[0], p.ub[1], p.ub[2], p.ub[4]])
     pts = []
-    while len(pts) < n:
+    for _ in range(max_batches):
+        if len(pts) >= n:
+            break
         u = (np.argsort(rng.random((n, 4)), axis=0) + rng.random((n, 4))) / n
         for y in lo + u * (hi - lo):
             if rp.fuel(y) > p.lb[3] and len(pts) < n:
                 pts.append(rp.x_of_y(y))
+    if len(pts) < n:
+        raise ValueError("no starting point with positive fuel: the payload is too heavy for the bounds")
     return pts
 
 
@@ -109,7 +108,7 @@ def multistart(p: Params, n=40, seed=0):
     return rows
 
 
-SENS_PARAMS = [("MTOW", "kg"), ("M_max", "-"), ("k_f", "fuel-volume coeff."), ("W_pay", "kg"),
+SENS_PARAMS = [("MTOW", "kg"), ("M_max", "unit of Mach"), ("k_f", "kg/m³ of k_f"), ("W_pay", "kg"),
                ("V_stall_max", "m/s"), ("b_max", "m")]
 
 
@@ -126,10 +125,25 @@ def sensitivities(p: Params, opt, rel=0.01):
         dRdp = lagrangian_param_sensitivity(p, x, k, name)
         dp = rel * v
         R1 = optimize(p.with_(**{name: v + dp}), x0=x, check=False)["design"]["range_km"]
+        dRdp += 0.0                                   # turns -0.0 into 0.0
         rows.append(dict(parameter=name, unit=unit, value=v, dR_dp_km_per_unit=dRdp,
                          predicted_dR_km=dRdp * dp, resolved_dR_km=R1 - R0,
                          elasticity=dRdp * v / R0))
     return k, rows
+
+
+def fly_fixed_geometry(p: Params, x_design, payload):
+    """Fly an existing wing (S, AR, V of x_design, its wing mass) with a given payload.
+    Fuel = as much as the tanks hold and the MTOW allows. Returns the design x, or None if
+    no cruise fuel is left (payload too heavy for this MTOW)."""
+    m = AircraftModel(p)
+    S, AR, V = x_design[:3]
+    OEW = p.W_fixed + m.wing_mass(x_design)
+    tank = p.k_f * S ** 1.5 / math.sqrt(AR)
+    fuel_total = min(tank, p.MTOW - OEW - payload)
+    if fuel_total - p.W_res <= 0:
+        return None
+    return np.array([S, AR, V, fuel_total - p.W_res, OEW + payload + fuel_total])
 
 
 def payload_range(p: Params, x_opt, payloads):
@@ -141,26 +155,20 @@ def payload_range(p: Params, x_opt, payloads):
     m = AircraftModel(p)
     xb = baseline_x(p)
 
-    def fixed_geometry_range(x_design, pay):
-        S, AR, V = x_design[:3]
-        Wwing = m.wing_mass(x_design)
-        OEW = p.W_fixed + Wwing
-        cap = p.k_f * S ** 1.5 / math.sqrt(AR)
-        fuel_tot = min(cap, p.MTOW - OEW - pay)
-        Wf = fuel_tot - p.W_res
-        if Wf <= 0:
-            return np.nan
-        return m.range_km((S, AR, V, Wf, OEW + pay + fuel_tot))
+    def fixed_range(x_design, pay):
+        x = fly_fixed_geometry(p, x_design, pay)
+        return np.nan if x is None else m.range_km(x)
 
     rows = []
     for pay in payloads:
         ropt = optimize(p.with_(W_pay=pay), x0=x_opt, check=True)
         rows.append(dict(payload_kg=pay,
-                         range_737_km=fixed_geometry_range(xb, pay),
-                         range_opt_fixed_km=fixed_geometry_range(x_opt, pay),
+                         range_737_km=fixed_range(xb, pay),
+                         range_opt_fixed_km=fixed_range(x_opt, pay),
                          range_reopt_km=ropt["design"]["range_km"],
                          reopt_S=ropt["x"][0], reopt_AR=ropt["x"][1],
                          reopt_rel_diff_vs_slsqp=ropt["rel_diff_vs_slsqp"],
+                         converged=ropt["alm"].converged, slsqp_success=ropt["slsqp_success"],
                          reopt_active=";".join(ropt["active"])))
     return rows
 
@@ -174,6 +182,7 @@ def sweep(p: Params, name, values):
         rows.append(dict(param=name, value=v, range_km=d["range_km"], S=d["S"], AR=d["AR"], span=d["span"],
                          Mach=d["Mach"], V=d["V"], W_fuel=d["W_fuel"], W_wing=d["W_wing"], LD=d["LD"],
                          CL=d["CL"], V_stall=d["V_stall"], active=";".join(r["active"]),
-                         rel_diff_vs_slsqp=r["rel_diff_vs_slsqp"], converged=r["alm"].converged))
+                         rel_diff_vs_slsqp=r["rel_diff_vs_slsqp"], converged=r["alm"].converged,
+                         slsqp_success=r["slsqp_success"]))
         x0 = r["x"]
     return rows

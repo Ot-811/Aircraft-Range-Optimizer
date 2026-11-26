@@ -1,7 +1,7 @@
-method,converged,outer_it,inner_it,f_evals,grad_evals,hess_evals,fallbacks,time_s,range_km,max_rel_err_vs_slsqp,max_violation
-gd,True,10,24395,368915,24405,0,0,10.3223,5705.39,1.13731e-06,5.52539e-10
-newton,True,9,24,49,225,24,2,0.0250093,5705.39,1.82651e-08,4.73762e-09
-modnewton,True,9,24,48,225,24,0,0.040214,5705.39,1.8265e-08,4.73761e-09
-bfgs,True,9,222,326,231,0,0,0.0230855,5705.39,1.81116e-08,4.77263e-09
-sr1,True,9,85,372,94,0,0,0.0152252,5705.39,1.8281e-08,4.74169e-09
-SLSQP (SciPy),True,7,nan,7,7,0,0,0.0007868,5705.39,0,0
+method,converged,outer_it,inner_it,f_evals,grad_evals,hess_evals,fallbacks,time_s,range_km,max_rel_err_vs_slsqp,max_violation,inner_cap_hits
+gd,True,10,24399,368333,24409,0,0,29.8208,5705.23,1.05301e-06,4.06576e-09,8
+newton,True,9,24,50,225,24,2,0.0321248,5705.23,1.82474e-08,4.73349e-09,0
+modnewton,True,9,24,82,225,24,0,0.0393752,5705.23,1.82461e-08,4.73315e-09,0
+bfgs,True,9,219,335,228,0,0,0.0818295,5705.23,1.81811e-08,4.76683e-09,0
+sr1,True,9,115,263,124,0,7,0.0231223,5705.23,1.81847e-08,4.7173e-09,0
+SLSQP (SciPy),True,7,nan,7,7,0,0,0.0015837,5705.23,0,2.22045e-16,0

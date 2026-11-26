@@ -6,18 +6,18 @@
       "mach"
     ],
     "multipliers": {
-      "weight_buildup": 3.5984058330343474,
-      "mtow": 2.615573654512038,
-      "fuel_volume": 0.3695029601345917,
-      "mach": 0.3465166805433687
+      "weight_buildup": 3.598413982180615,
+      "mtow": 2.6153607026679304,
+      "fuel_volume": 0.3694879203298652,
+      "mach": 0.3467861971624848
     },
-    "stationarity": 4.681545706652912e-10,
-    "min_multiplier": 0.3465166805433687,
-    "primal_violation": 4.772633621641376e-09,
-    "complementarity": 1.2483174763403556e-08,
+    "stationarity": 3.4096397927285693e-10,
+    "min_multiplier": 0.3467861971624848,
+    "primal_violation": 4.766828487490216e-09,
+    "complementarity": 1.2466975902539918e-08,
     "null_space_dim": 1,
     "reduced_hessian_eigs": [
-      0.40302834705209734
+      0.403205000749595
     ]
   },
   "span36": {
@@ -28,16 +28,16 @@
       "span"
     ],
     "multipliers": {
-      "weight_buildup": 3.602611345510546,
-      "mtow": 2.5301282027110283,
-      "fuel_volume": 0.3411098408836653,
-      "mach": 0.545195277478516,
-      "span": 0.15631309440044178
+      "weight_buildup": 3.6025682770063945,
+      "mtow": 2.529990596411126,
+      "fuel_volume": 0.34113031462849236,
+      "mach": 0.5452000247106945,
+      "span": 0.1561257802263282
     },
-    "stationarity": 1.5543122344752192e-15,
-    "min_multiplier": 0.15631309440044178,
-    "primal_violation": 4.940058806468528e-09,
-    "complementarity": 1.2498982109297005e-08,
+    "stationarity": 6.661338147750939e-16,
+    "min_multiplier": 0.1561257802263282,
+    "primal_violation": 4.938269793086647e-09,
+    "complementarity": 1.2493776139050334e-08,
     "null_space_dim": 0,
     "reduced_hessian_eigs": []
   }

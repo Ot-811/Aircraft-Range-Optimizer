@@ -49,6 +49,17 @@ class AircraftModel:
         p = self.p
         return p.k_w * S ** p.a * AR ** p.b * Wi ** p.c
 
+    def initial_mass(self, S, AR, W_fuel, iters=50):
+        """W_i that closes the weight build-up for a given wing and fuel load.
+        W_i appears on both sides (the wing gets heavier with W_i), so we iterate
+        W_i <- W_fixed + W_wing(W_i) + W_fuel + W_res + W_pay; it converges quickly because
+        the wing is a small part of the total mass."""
+        p = self.p
+        Wi = p.W_fixed + W_fuel + p.W_res + p.W_pay
+        for _ in range(iters):
+            Wi = p.W_fixed + p.k_w * S ** p.a * AR ** p.b * Wi ** p.c + W_fuel + p.W_res + p.W_pay
+        return Wi
+
     def in_domain(self, x):
         S, AR, V, Wf, Wi = x
         return S > 0 and AR > 0 and V > 0 and 0 < Wf < Wi

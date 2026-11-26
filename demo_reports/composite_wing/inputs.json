@@ -1,0 +1,16 @@
+{
+  "name": "composite_wing",
+  "passengers": 162,
+  "MTOW_kg": 79016.0,
+  "altitude_ft": 35000.0,
+  "engine_factor": 1.0,
+  "max_stall_speed": 64.0,
+  "max_Mach": 0.8,
+  "wing_structure_factor": 0.8,
+  "max_wingspan_m": null,
+  "start_wingspan_m": 34.32,
+  "start_wing_area_m2": 124.6,
+  "start_Mach": 0.785,
+  "start_cruise_fuel_kg": 17000.0,
+  "solver": "bfgs"
+}

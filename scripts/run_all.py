@@ -1,20 +1,29 @@
-"""Run every study in the proposal and write tables (results/tables), figures (results/figures)
-and a one-page summary (results/summary.md).
+"""MAIN STUDY. Runs every study in the proposal and saves the results:
 
-    python scripts/run_all.py            # full run (~1-2 min)
+    results/tables/*.csv     every table
+    results/figures/*.png    every figure
+    results/results.json     all numbers the report needs
+    results/report.md/.pdf   the auto-generated report (built by scripts/main_report.py)
+
+    python scripts/run_all.py            # full run (about 1-2 min)
     python scripts/run_all.py --quick    # fewer sweep points / starts
+
+Computing and reporting are separate: `python scripts/main_report.py` rebuilds the report from
+results/results.json without re-running the optimisation.
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import json
-import math
+import platform
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+import scipy
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -22,22 +31,23 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from aircraft_opt.params import calibrated_params, baseline_x, B737, NMI  # noqa: E402
+from aircraft_opt.params import calibrated_params, baseline_x, B737, PARAMETER_SOURCES  # noqa: E402
 from aircraft_opt.model import AircraftModel  # noqa: E402
 from aircraft_opt.atmosphere import FT  # noqa: E402
+from aircraft_opt.report_writer import json_default  # noqa: E402
 from aircraft_opt import studies  # noqa: E402
+from main_report import build_main_report  # noqa: E402  (scripts/main_report.py)
 
 try:  # Windows consoles default to cp1252; keep printing Unicode safe
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
 
-TAB = ROOT / "results" / "tables"
-FIG = ROOT / "results" / "figures"
-TAB.mkdir(parents=True, exist_ok=True)
-FIG.mkdir(parents=True, exist_ok=True)
+RES = ROOT / "results"
+TAB = RES / "tables"
+FIG = RES / "figures"
 
-# Validated categorical palette (fixed order), text inks
+# Fixed colour order and text inks for all figures
 C = ["#257de0", "#f47230", "#00b894", "#d28e05", "#ee7fac", "#008a17", "#6a4ce2", "#ec4647"]
 INK, INK2, GRID = "#191919", "#666666", "#e6e6e6"
 plt.rcParams.update({
@@ -47,6 +57,8 @@ plt.rcParams.update({
     "lines.linewidth": 2.0, "lines.markersize": 5, "legend.frameon": False, "axes.titlesize": 10,
     "axes.titleweight": "bold",
 })
+METHOD_NAMES = {"gd": "Gradient descent", "newton": "Newton", "modnewton": "Modified Newton",
+                "bfgs": "BFGS", "sr1": "SR1"}
 
 
 def write_csv(name, rows):
@@ -59,30 +71,36 @@ def write_csv(name, rows):
             w.writerow({k: (f"{v:.6g}" if isinstance(v, float) else v) for k, v in r.items()})
 
 
-def fmt(v, nd=1):
-    return f"{v:,.{nd}f}"
+def no_history(rows):
+    return [{k: v for k, v in r.items() if k != "history"} for r in rows]
 
 
 def main(quick=False):
     t0 = time.perf_counter()
-    log = []
-    say = lambda s="": (print(s), log.append(s))  # noqa: E731
+    TAB.mkdir(parents=True, exist_ok=True)
+    FIG.mkdir(parents=True, exist_ok=True)
+    step = lambda s: print(f"[{time.perf_counter() - t0:5.1f} s] {s}")  # noqa: E731
 
     # ------------------------------------------------------------ calibration
+    step("calibration")
     p_lit = calibrated_params(calibrate_cT=False)
     p = calibrated_params()
     xb = baseline_x(p)
     m = AircraftModel(p)
     R_lit = AircraftModel(p_lit).range_km(xb)
-    calib = dict(published_range_km=B737["range_km"], predicted_range_lit_cT_km=R_lit,
+    calib = dict(published_range_km=B737["range_km"], range_nmi=B737["range_nmi"],
+                 predicted_range_lit_cT_km=R_lit,
                  prediction_error_pct=100 * (R_lit / B737["range_km"] - 1),
-                 cT_literature_lb_per_lbf_h=p_lit.cT * 3600, cT_effective_lb_per_lbf_h=p.cT * 3600,
+                 cT_literature=p_lit.cT * 3600, cT_effective=p.cT * 3600,
                  k_w=p.k_w, W_fixed_kg=p.W_fixed, W_wing_737_kg=m.wing_mass(xb), k_f=p.k_f,
                  rho_cruise=p.rho, a_cruise=p.a_sound)
-    json.dump(calib, open(TAB / "calibration.json", "w", encoding="utf-8"), indent=2)
+    (TAB / "calibration.json").write_text(json.dumps(calib, indent=2), encoding="utf-8")
     base = m.describe(xb)
+    params = [dict(name=n, description=d, unit=u, value=getattr(p, n) * k, source=s)
+              for n, d, u, k, s in PARAMETER_SOURCES]
 
     # --------------------------------------------------------- main optimum
+    step("optimum with and without the 36 m span limit")
     opt = studies.optimize(p)
     p36 = p.with_(b_max=36.0)
     opt36 = studies.optimize(p36)
@@ -92,6 +110,7 @@ def main(quick=False):
     write_csv("designs.csv", designs)
 
     # ---------------------------------------------------- method comparison
+    step("method comparison (5 inner solvers + SLSQP, two cases)")
     mc = studies.method_comparison(p)
     mc36 = studies.method_comparison(p36)
     write_csv("method_comparison_nospan.csv", mc)
@@ -99,25 +118,30 @@ def main(quick=False):
     hist = studies.inner_histories(p)
 
     # -------------------------------------------------- KKT + sensitivities
+    step("KKT check and sensitivities")
     kkt, sens = studies.sensitivities(p, opt)
     kkt36, sens36 = studies.sensitivities(p36, opt36)
     write_csv("sensitivities_nospan.csv", sens)
     write_csv("sensitivities_span36.csv", sens36)
     clean = lambda k: {kk: v for kk, v in k.items() if kk not in ("lam_vector", "nu")}  # noqa: E731
-    json.dump(dict(nospan=clean(kkt), span36=clean(kkt36)), open(TAB / "kkt.json", "w", encoding="utf-8"), indent=2)
+    (TAB / "kkt.json").write_text(json.dumps(dict(nospan=clean(kkt), span36=clean(kkt36)), indent=2,
+                                          default=json_default), encoding="utf-8")
 
     # ------------------------------------------------------------ multistart
+    step("multi-start")
     ms = studies.multistart(p, n=10 if quick else 40)
     write_csv("multistart.csv", ms)
 
     # --------------------------------------------------------- payload-range
+    step("payload-range")
     pays = np.linspace(0, B737["MZFW"] - B737["OEW"], 7 if quick else 15)
     pr = studies.payload_range(p, opt["x"], pays)
     write_csv("payload_range.csv", pr)
 
     # ------------------------------------------------------------- sweeps
+    step("parameter sweeps")
     n = 5 if quick else 9
-    sweeps = {
+    sweeps = {   # key: (axis label, factor from plotted value to model value, plotted values)
         "k_w": ("Wing-weight coefficient  k_w / k_w,737", p.k_w, np.linspace(0.6, 1.2, n)),
         "cT": ("Engine TSFC  c_T / c_T,737", p.cT, np.linspace(0.75, 1.1, n)),
         "V_stall_max": ("Max. stall speed [m/s]", 1.0, np.linspace(52, 68, n)),
@@ -132,6 +156,7 @@ def main(quick=False):
         write_csv(f"sweep_{key}.csv", rows)
 
     # ================================================================ figures
+    step("figures")
     # 1. baseline vs optimum bar comparison (indexed to baseline = 100)
     fig, ax = plt.subplots(figsize=(7.2, 3.2))
     qty = [("range_km", "Range"), ("S", "Wing area"), ("AR", "Aspect ratio"), ("span", "Span"),
@@ -139,27 +164,28 @@ def main(quick=False):
     w = 0.38
     xs = np.arange(len(qty))
     for j, (d, lab) in enumerate([(designs[1], "Optimum, no span limit"), (designs[2], "Optimum, 36 m span")]):
-        vals = [100 * d[q] / base[q] for q, _ in qty]
-        ax.bar(xs + (j - 0.5) * w, vals, w * 0.92, color=C[j], label=lab, zorder=3)
+        ax.bar(xs + (j - 0.5) * w, [100 * d[q] / base[q] for q, _ in qty], w * 0.92, color=C[j], label=lab, zorder=3)
     ax.axhline(100, color=INK2, lw=1, zorder=2)
     ax.set_xticks(xs, [l for _, l in qty])
     ax.set_ylabel("% of 737-800 baseline")
-    ax.set_ylim(80, 130)
+    pcts = [100 * d[q] / base[q] for d in designs[1:] for q, _ in qty]
+    ax.set_ylim(min(80, min(pcts) - 5), max(130, max(pcts) + 5))      # never clip a bar
     ax.set_title("Optimised designs relative to the 737-800 baseline (= 100)")
     ax.legend(loc="upper left", ncols=2)
     fig.tight_layout(); fig.savefig(FIG / "fig1_design_comparison.png"); plt.close(fig)
 
     # 2. convergence of inner methods on the same subproblem
     fig, ax = plt.subplots(figsize=(6.4, 3.4))
-    names = {"gd": "Gradient descent", "newton": "Newton", "modnewton": "Modified Newton",
-             "bfgs": "BFGS", "sr1": "SR1"}
     for i, (k, h) in enumerate(hist.items()):
-        ax.semilogy(h[:, 0], np.maximum(h[:, 2], 1e-16), color=C[i], label=names[k],
+        ax.semilogy(h[:, 0], np.maximum(h[:, 2], 1e-16), color=C[i], label=METHOD_NAMES[k],
                     ls="--" if k == "newton" else "-", zorder=4 if k == "newton" else 3)
     ax.set_xscale("symlog", linthresh=10)
     ax.set_xlabel("Iteration (first ALM subproblem, μ = 10)")
     ax.set_ylabel("‖∇L_A‖∞")
-    ax.set_title("Unconstrained methods on the same subproblem\n(Newton and modified Newton coincide here: Hessian is positive definite)", fontsize=9)
+    title = "Unconstrained methods on the same subproblem"
+    if np.array_equal(hist["newton"], hist["modnewton"]):
+        title += "\n(Newton and modified Newton coincide: the Hessian is positive definite here)"
+    ax.set_title(title, fontsize=9)
     ax.legend(ncols=2)
     fig.tight_layout(); fig.savefig(FIG / "fig2_inner_convergence.png"); plt.close(fig)
 
@@ -198,7 +224,11 @@ def main(quick=False):
         fig, axs = plt.subplots(1, 4, figsize=(10, 2.7))
         for a_, (q, ql) in zip(axs, [("range_km", "Range [km]"), ("S", "Wing area [m²]"),
                                       ("AR", "Aspect ratio"), ("Mach", "Cruise Mach")]):
-            a_.plot(xv, [r[q] for r in rows], color=C[0], marker="o")
+            yv = np.array([r[q] for r in rows])
+            a_.plot(xv, yv, color=C[0], marker="o")
+            a_.ticklabel_format(axis="y", useOffset=False)
+            if np.ptp(yv) < 1e-6 * abs(yv.mean()):        # constant: don't plot rounding noise
+                a_.set_ylim(0.95 * yv.mean(), 1.05 * yv.mean())
             a_.set_title(ql); a_.set_xlabel(label, fontsize=8)
         fig.tight_layout(); fig.savefig(FIG / f"fig{5 + idx}_sweep_{key}.png"); plt.close(fig)
 
@@ -213,85 +243,33 @@ def main(quick=False):
     ax.legend()
     fig.tight_layout(); fig.savefig(FIG / "fig9_multistart.png"); plt.close(fig)
 
-    # ================================================================ summary
-    say("# Results summary (auto-generated by scripts/run_all.py)\n")
-    say("## Calibration against the Boeing 737-800\n")
-    say(f"- Published range: {fmt(B737['range_km'],0)} km ({B737['range_nmi']:.0f} nmi, 162 pax).")
-    say(f"- Model with literature cruise TSFC {calib['cT_literature_lb_per_lbf_h']:.3f} lb/lbf/h predicts "
-        f"{fmt(R_lit,0)} km ({calib['prediction_error_pct']:+.1f} %).")
-    say(f"- Effective c_T that reproduces the published range: {calib['cT_effective_lb_per_lbf_h']:.3f} lb/lbf/h "
-        "(absorbs climb/descent, taxi and other effects not modelled). Used for all studies.")
-    say(f"- Wing mass (Raymer): {fmt(calib['W_wing_737_kg'],0)} kg; W_fixed = {fmt(p.W_fixed,0)} kg; "
-        f"k_f = {p.k_f:.2f} kg/m³.\n")
-    say("## Optimum vs baseline\n")
-    cols = [("range_km", "Range [km]", 0), ("S", "S [m²]", 1), ("AR", "AR", 2), ("span", "Span [m]", 2),
-            ("Mach", "Mach", 3), ("LD", "L/D", 2), ("CL", "C_L", 3), ("W_wing", "Wing [kg]", 0),
-            ("W_fuel", "Trip fuel [kg]", 0), ("W_i", "W_i [kg]", 0), ("V_stall", "V_stall [m/s]", 1)]
-    say("| Quantity | " + " | ".join(d["case"] for d in designs) + " |")
-    say("|---|" + "---|" * len(designs))
-    for q, lab, nd in cols:
-        say(f"| {lab} | " + " | ".join(fmt(d[q], nd) for d in designs) + " |")
-    g1 = 100 * (opt["design"]["range_km"] / base["range_km"] - 1)
-    g2 = 100 * (opt36["design"]["range_km"] / base["range_km"] - 1)
-    say(f"\nModel-predicted range gain: **{g1:+.2f} %** without span limit, **{g2:+.2f} %** with the 36 m limit.")
-    say(f"Active constraints (no span): {', '.join(opt['active'])}. With span limit: {', '.join(opt36['active'])}.")
-    say(f"Custom ALM vs SLSQP max relative difference in x: {opt['rel_diff_vs_slsqp']:.1e} / {opt36['rel_diff_vs_slsqp']:.1e}.\n")
-
-    for title, rows in [("Method comparison (no span limit)", mc), ("Method comparison (36 m span)", mc36)]:
-        say(f"## {title}\n")
-        say("| Method | Converged | Outer it. | Inner it. | f evals | ∇f evals | Hessians | Fallbacks | Time [s] | Max rel. err vs SLSQP |")
-        say("|---|---|---|---|---|---|---|---|---|---|")
-        for r in rows:
-            inner = "-" if isinstance(r["inner_it"], float) and math.isnan(r["inner_it"]) else r["inner_it"]
-            say(f"| {r['method']} | {r['converged']} | {r['outer_it']} | {inner} | {r['f_evals']} | {r['grad_evals']} | "
-                f"{r['hess_evals']} | {r['fallbacks']} | {r['time_s']:.3f} | {r['max_rel_err_vs_slsqp']:.1e} |")
-        say("")
-
-    for title, k, sr in [("KKT check and sensitivities (no span limit)", kkt, sens),
-                         ("KKT check and sensitivities (36 m span)", kkt36, sens36)]:
-        say(f"## {title}\n")
-        say(f"- Active: {', '.join(k['active'])}; stationarity residual {k['stationarity']:.1e}; "
-            f"min multiplier {k['min_multiplier']:.3g} (≥ 0 required); complementarity {k['complementarity']:.1e}.")
-        say(f"- Multipliers (scaled problem): " + ", ".join(f"{a} = {b:.4g}" for a, b in k["multipliers"].items()))
-        if k["null_space_dim"]:
-            say(f"- Second order: reduced Hessian on the {k['null_space_dim']}-dim tangent space has eigenvalues "
-                f"{', '.join(f'{e:.3g}' for e in k['reduced_hessian_eigs'])} (> 0 ⇒ strict local minimum).")
-        else:
-            say("- Second order: active constraint gradients span R^5 (tangent space is {0}) with strictly positive "
-                "multipliers, so the point is a strict local minimum (vertex solution).")
-        say("\n| Parameter | Value | dR/dp (KKT) | Predicted ΔR for +1 % [km] | Re-solved ΔR [km] | Elasticity |")
-        say("|---|---|---|---|---|---|")
-        for r in sr:
-            say(f"| {r['parameter']} | {r['value']:.4g} | {r['dR_dp_km_per_unit']:.4g} km/{r['unit']} | "
-                f"{r['predicted_dR_km']:.2f} | {r['resolved_dR_km']:.2f} | {r['elasticity']:.3f} |")
-        say("")
-
-    say("## Multi-start\n")
+    # ================================================================ save all numbers
     ok = ra[np.isfinite(ra)]
-    distinct = np.unique(np.round(ok, 1))
-    say(f"- {len(ms)} Latin-hypercube starts. ALM converged in {sum(r['alm_converged'] for r in ms)}; "
-        f"SLSQP succeeded in {sum(bool(r['slsqp_success']) for r in ms)}.")
-    say(f"- Distinct final ranges (ALM, 0.1 km rounding): {', '.join(fmt(v,1) for v in distinct)} km. "
-        "This is numerical evidence, not proof, of global optimality.\n")
+    results = dict(
+        meta=dict(date=datetime.now().strftime("%Y-%m-%d %H:%M"), quick=quick,
+                  run_time_s=time.perf_counter() - t0, python=platform.python_version(),
+                  numpy=np.__version__, scipy=scipy.__version__, matplotlib=matplotlib.__version__),
+        params=params, calibration=calib, designs=designs,
+        optimum=dict(active=opt["active"], rel_diff_vs_slsqp=opt["rel_diff_vs_slsqp"],
+                     alm_converged=opt["alm"].converged, slsqp_success=opt["slsqp_success"]),
+        optimum36=dict(active=opt36["active"], rel_diff_vs_slsqp=opt36["rel_diff_vs_slsqp"],
+                       alm_converged=opt36["alm"].converged, slsqp_success=opt36["slsqp_success"]),
+        methods=dict(nospan=no_history(mc), span36=no_history(mc36)),
+        kkt=dict(nospan=clean(kkt), span36=clean(kkt36)),
+        sensitivities=dict(nospan=sens, span36=sens36),
+        multistart=dict(n=len(ms), alm_converged=sum(bool(r["alm_converged"]) for r in ms),
+                        slsqp_success=sum(bool(r["slsqp_success"]) for r in ms),
+                        distinct_ranges_km=sorted(set(np.round(ok, 1).tolist()))),
+        payload_range=pr,
+        sweeps={k: dict(label=sweeps[k][0], rows=sweep_rows[k]) for k in sweeps},
+    )
+    results["meta"]["run_time_s"] = time.perf_counter() - t0
+    with open(RES / "results.json", "w", encoding="utf-8") as fh:
+        json.dump(results, fh, indent=1, default=json_default)
 
-    say("## Payload-range\n")
-    say("| Payload [kg] | 737-800 geometry [km] | Optimised geometry fixed [km] | Re-optimised [km] | Re-opt. S | Re-opt. AR | Active (re-opt.) |")
-    say("|---|---|---|---|---|---|---|")
-    for r in pr:
-        say(f"| {fmt(r['payload_kg'],0)} | {fmt(r['range_737_km'],0)} | {fmt(r['range_opt_fixed_km'],0)} | "
-            f"{fmt(r['range_reopt_km'],0)} | {r['reopt_S']:.1f} | {r['reopt_AR']:.2f} | {r['reopt_active']} |")
-    say("")
-    say("## Parameter studies\n")
-    for key, (label, _, _) in sweeps.items():
-        say(f"### {label}\n")
-        say("| Value | Range [km] | S [m²] | AR | Span [m] | Mach | L/D | Active | ALM vs SLSQP |")
-        say("|---|---|---|---|---|---|---|---|---|")
-        for r in sweep_rows[key]:
-            say(f"| {r['x_plot']:.4g} | {fmt(r['range_km'],0)} | {r['S']:.1f} | {r['AR']:.2f} | {r['span']:.2f} | "
-                f"{r['Mach']:.3f} | {r['LD']:.2f} | {r['active']} | {r['rel_diff_vs_slsqp']:.0e} |")
-        say("")
-    say(f"_Total run time: {time.perf_counter() - t0:.1f} s._")
-    (ROOT / "results" / "summary.md").write_text("\n".join(log) + "\n", encoding="utf-8")
+    step("report")
+    print(build_main_report(RES))
+    step(f"done. Results in {RES}")
 
 
 if __name__ == "__main__":
