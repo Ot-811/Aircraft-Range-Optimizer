@@ -54,7 +54,6 @@ def test_demo_end_to_end(tmp_path, monkeypatch):
     assert (tmp_path / "t" / "report.md").is_file()
 
 
-# --------------------------------------------------------------------------- new analyses
 def test_convergence_order_on_known_sequences():
     from aircraft_opt.studies import convergence_stats
     linear = [0.5 ** k for k in range(40)]                 # e_{k+1} = e_k / 2
@@ -69,7 +68,6 @@ def test_design_space_optimum_is_best_allowed_grid_point():
     p = calibrated_params()
     opt = optimize(p, check=False)
     ds = design_space(p, opt["x"], n=60)
-    # Mach and MTOW sit exactly on their limits on this slice, hence the 1e-6 tolerance
     allowed = np.all([np.nan_to_num(g, nan=1.0) <= 1e-6 for g in ds["g"].values()], axis=0)
     assert allowed.sum() > 100
     assert np.nanmax(np.where(allowed, ds["range_km"], np.nan)) <= opt["design"]["range_km"] + 1e-6

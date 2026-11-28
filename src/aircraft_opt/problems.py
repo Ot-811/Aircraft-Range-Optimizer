@@ -1,11 +1,4 @@
-"""Scaled optimisation problems built on AircraftModel.
-
-* FullProblem    : the original 5-variable formulation (used by SLSQP and the KKT check).
-* ReducedProblem : W_fuel eliminated through the weight build-up (used by the custom ALM solver).
-
-Both work in scaled variables z = x / x_ref so that every variable is O(1).
-All constraints are normalised and written as c(z) <= 0 (inequalities) or c(z) = 0.
-"""
+"""Scaled problems: FullProblem (5 variables) and ReducedProblem (W_fuel eliminated, 4 variables)."""
 from __future__ import annotations
 
 import numpy as np
@@ -67,11 +60,7 @@ class FullProblem:
 
 
 class ReducedProblem:
-    """y = (S, AR, V, W_i); W_fuel(y) = W_i - W_fixed - W_wing(S,AR,W_i) - W_res - W_pay.
-
-    The equality constraint is satisfied identically, so every iterate is a weight-consistent
-    aircraft. Bounds on all five physical variables become ordinary inequality constraints.
-    """
+    """y = (S, AR, V, W_i); W_fuel follows from the weight build-up, so every iterate is consistent."""
     IDX = [0, 1, 2, 4]   # positions of y inside x
 
     def __init__(self, p: Params):
@@ -84,7 +73,6 @@ class ReducedProblem:
         self.ineq_names = (list(self.m.ineq_names)
                            + [f"{v}_lb" for v in VAR_NAMES] + [f"{v}_ub" for v in VAR_NAMES])
 
-    # mapping --------------------------------------------------------------
     def fuel(self, y):
         S, AR, V, Wi = y
         p = self.p
@@ -109,7 +97,6 @@ class ReducedProblem:
     def z_from_x(self, x):
         return np.asarray(x, float)[self.IDX] / self.yref
 
-    # problem functions in scaled variables --------------------------------
     def f(self, z):
         y = np.asarray(z, float) * self.yref
         if np.any(y <= 0):

@@ -1,5 +1,4 @@
-"""Reference solver (SciPy SLSQP on the original 5-variable formulation) and an independent
-KKT / second-order check of any returned design."""
+"""SciPy SLSQP reference solver and an independent KKT / second-order check."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -43,12 +42,7 @@ def _fd_hess(fun_grad, z, h=1e-6):
 
 
 def kkt_check(p, x, act_tol=1e-6):
-    """Independent first- and second-order KKT check at a design x (full formulation).
-
-    Active set = equality + inequalities/bounds with c_i > -act_tol. Multipliers are the
-    least-squares solution of  grad f + J_act' lam = 0  (scaled variables).
-    Returns a dict with multipliers (physical names), residuals and reduced-Hessian eigenvalues.
-    """
+    """Independent KKT and second-order check of a design x (least-squares multipliers)."""
     prob = FullProblem(p, include_bounds_as_ineq=True)
     z = prob.z(x)
     gf = prob.grad(z)
@@ -66,7 +60,6 @@ def kkt_check(p, x, act_tol=1e-6):
         return prob.grad(zz) + prob.jac_eq(zz).T @ nu + prob.jac_ineq(zz).T @ lam
 
     H = _fd_hess(gradL, z)
-    # null space of active constraints with strictly positive multipliers (strongly active)
     strong = [0] + [1 + i for i, li in enumerate(lam_act) if li > 1e-8]
     As = A[strong]
     U, sv, Vt = np.linalg.svd(As)
@@ -88,8 +81,7 @@ def kkt_check(p, x, act_tol=1e-6):
 
 
 def lagrangian_param_sensitivity(p, x, kkt, param, rel_step=1e-4):
-    """d f*/d param = dL/d param at fixed (x*, lambda*) (envelope theorem), by central difference.
-    Returns d(range_km)/d(param) using R = exp(-f)."""
+    """Envelope theorem: dR/dp = -R dL/dp at fixed x* and multipliers."""
     from dataclasses import replace
 
     v = getattr(p, param)

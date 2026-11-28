@@ -13,8 +13,7 @@ FT = 0.3048
 
 
 def isa(h_m: float):
-    """Return (T [K], p [Pa], rho [kg/m^3], a [m/s]) at ISA (geopotential) altitude h_m, 0..20 km.
-    Flight levels are pressure altitudes, i.e. exactly this ISA altitude (FL350 = 35,000 ft)."""
+    """Return (T [K], p [Pa], rho [kg/m^3], a [m/s]) at ISA altitude h_m (0-20 km)."""
     if not 0.0 <= h_m <= 20000.0:
         raise ValueError("ISA model valid for 0-20 km")
     if h_m <= H_TROP:

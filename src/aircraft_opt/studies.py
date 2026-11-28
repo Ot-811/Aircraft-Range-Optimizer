@@ -1,5 +1,4 @@
-"""Study drivers: optimisation with cross-check, method comparison, multi-start,
-KKT sensitivities, payload-range and parameter sweeps."""
+"""Studies: optimisation with SLSQP cross-check, solver comparison, multi-start, sensitivities, sweeps."""
 from __future__ import annotations
 
 import math
@@ -73,9 +72,7 @@ def inner_histories(p: Params, x0=None, mu=10.0):
 
 
 def latin_hypercube_starts(p: Params, n, seed=0, max_batches=50):
-    """Random starting points (S, AR, V, W_i) by Latin hypercube, kept only if the fuel left by the
-    weight build-up is above its lower bound. W_i is drawn from 60 t (lighter aircraft cannot carry
-    the 737 payload plus fuel) to its upper bound. Raises if no such point exists."""
+    """Latin-hypercube starts (S, AR, V, W_i) with fuel above its lower bound; raises if none exist."""
     rng = np.random.default_rng(seed)
     rp = ReducedProblem(p)
     lo = np.array([p.lb[0], p.lb[1], p.lb[2], 60_000.0])
@@ -133,9 +130,7 @@ def sensitivities(p: Params, opt, rel=0.01):
 
 
 def fly_fixed_geometry(p: Params, x_design, payload):
-    """Fly an existing wing (S, AR, V of x_design, its wing mass) with a given payload.
-    Fuel = as much as the tanks hold and the MTOW allows. Returns the design x, or None if
-    no cruise fuel is left (payload too heavy for this MTOW)."""
+    """Fly an existing wing with a payload: fuel = min(tank, MTOW room); None if no cruise fuel."""
     m = AircraftModel(p)
     S, AR, V = x_design[:3]
     OEW = p.W_fixed + m.wing_mass(x_design)
@@ -147,11 +142,7 @@ def fly_fixed_geometry(p: Params, x_design, payload):
 
 
 def payload_range(p: Params, x_opt, payloads):
-    """Three payload-range curves:
-    * fixed 737-800 geometry, speed, wing mass (classic diagram: MTOW-, tank- and payload-limited),
-    * fixed optimised geometry (designed for the nominal payload),
-    * design re-optimised for each payload (envelope of best designs).
-    Payload is capped at the 737-800 structural limit MZFW - OEW."""
+    """Payload-range: 737 geometry, optimised geometry fixed, and re-optimised for each payload."""
     m = AircraftModel(p)
     xb = baseline_x(p)
 
@@ -189,28 +180,18 @@ def sweep(p: Params, name, values):
 
 
 def convergence_stats(gnorms):
-    """Measured convergence of one unconstrained run from its gradient norms e_k = ||grad||.
-
-    * order p: if e_{k+1} ~ e_k^p (scaled problem, constant ~1) then p = ln e_{k+1} / ln e_k.
-      Averaged over the last two decreasing steps with e_k < 1e-2.
-      Theory: 1 = linear (gradient descent), between 1 and 2 = superlinear (BFGS, SR1),
-      2 = quadratic (Newton near the solution).
-    * factor: average contraction e_{k+1}/e_k while e goes from 1e-3 to 1e-6 (close to 1 = slow).
-    * iterations until e <= 1e-6.
-    """
+    """Measured order p = ln e_k+1 / ln e_k, contraction factor and iterations to 1e-6."""
     e = np.asarray(gnorms, float)
     steps = [k for k in range(len(e) - 1) if e[k] < 1e-2 and 1e-13 < e[k + 1] < e[k]]
     order = float(np.mean([math.log(e[k + 1]) / math.log(e[k]) for k in steps[-2:]])) if steps else math.nan
-    below = lambda t: next((k for k in range(len(e)) if e[k] <= t), None)  # noqa: E731
+    below = lambda t: next((k for k in range(len(e)) if e[k] <= t), None)
     a, b = below(1e-3), below(1e-6)
     factor = float((e[b] / e[a]) ** (1 / (b - a))) if a is not None and b is not None and b > a else math.nan
     return dict(order=order, factor=factor, iterations_to_1e_6=b)
 
 
 def design_space(p: Params, x_opt, n=150, S_lim=(80.0, 200.0), AR_lim=(6.0, 16.0)):
-    """Range over a grid of (S, AR), with V and W_i held at their optimal values (both sit on
-    their limits: Mach and MTOW). W_fuel follows from the weight build-up. Returns the grid,
-    the range [km] (NaN where there is no fuel) and the constraint values g (<= 0 is allowed)."""
+    """Range and constraint values over an (S, AR) grid with V and W_i fixed at the optimum."""
     m = AircraftModel(p)
     V, Wi = x_opt[2], x_opt[4]
     S, AR = np.meshgrid(np.linspace(*S_lim, n), np.linspace(*AR_lim, n))
@@ -226,16 +207,13 @@ def design_space(p: Params, x_opt, n=150, S_lim=(80.0, 200.0), AR_lim=(6.0, 16.0
     return dict(S=S, AR=AR, range_km=R, g=G)
 
 
-# Modelling assumptions varied in the tornado study: (Params attribute, label, relative change)
 TORNADO_PARAMS = [("CD0", "Zero-lift drag C_D0"), ("e", "Oswald efficiency e"),
                   ("CLmax", "Landing C_L,max"), ("W_res", "Reserve fuel"),
                   ("W_pay", "Payload (passenger mass)")]
 
 
 def tornado(rel=0.10):
-    """Change each assumed value by -rel and +rel and recompute the range GAIN of the optimum over
-    the 737-800 (both flown with the same assumptions). Model constants (C_D0, e, reserve) are
-    re-calibrated, exactly as the nominal model is; the payload is a mission input."""
+    """Range gain over the 737 when each assumption changes by -rel and +rel."""
     from .params import calibrated_params
     nominal = calibrated_params()
     rows = []

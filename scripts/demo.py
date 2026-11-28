@@ -1,26 +1,4 @@
-"""DEMO MODE (for the viva). Type in your own requirements and your own starting design,
-watch the optimiser improve it, and get a report.
-
-    python scripts/demo.py                  # asks questions; press Enter to keep the [default]
-    python scripts/demo.py --defaults       # no questions: 737-800 values, run name 'demo'
-
-Every run is saved under its name in demo_reports/<name>/:
-    inputs.json      what you typed (so the run can be repeated)
-    results.json     every number the report uses
-    fig_*.png        figures
-    report.md/.pdf   the demo report (built by scripts/demo_report.py)
-A name that already exists shows the saved result and asks before overwriting it.
-
-What the demo shows
-  1. whether your starting design is allowed (which constraints it breaks, by how much)
-  2. the 737-800 flown under the same requirements, for reference
-  3. the optimised design and how the optimiser got there (range and violation per iteration)
-  4. evidence that it really is the optimum:
-       - SciPy SLSQP (an independent solver) finds the same design
-       - our solver from 5 random starting points ends at the same design
-       - thousands of random allowed designs: none flies further
-       - the KKT conditions hold, and what each active constraint is worth
-"""
+"""Interactive demo: your requirements and starting design -> optimum, checks and report."""
 from __future__ import annotations
 
 import argparse
@@ -40,20 +18,20 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from aircraft_opt.params import calibrated_params, baseline_x, B737  # noqa: E402
-from aircraft_opt.model import AircraftModel  # noqa: E402
-from aircraft_opt.problems import ReducedProblem  # noqa: E402
-from aircraft_opt.alm import solve_alm  # noqa: E402
-from aircraft_opt.unconstrained import METHODS  # noqa: E402
-from aircraft_opt.reference import solve_slsqp, kkt_check  # noqa: E402
-from aircraft_opt.studies import fly_fixed_geometry, latin_hypercube_starts  # noqa: E402
-from aircraft_opt.atmosphere import FT  # noqa: E402
-from aircraft_opt.report_writer import json_default  # noqa: E402
-from demo_report import build_demo_report, DEFAULT_START_FUEL  # noqa: E402  (scripts/demo_report.py)
+from aircraft_opt.params import calibrated_params, baseline_x, B737
+from aircraft_opt.model import AircraftModel
+from aircraft_opt.problems import ReducedProblem
+from aircraft_opt.alm import solve_alm
+from aircraft_opt.unconstrained import METHODS
+from aircraft_opt.reference import solve_slsqp, kkt_check
+from aircraft_opt.studies import fly_fixed_geometry, latin_hypercube_starts
+from aircraft_opt.atmosphere import FT
+from aircraft_opt.report_writer import json_default
+from demo_report import build_demo_report, DEFAULT_START_FUEL
 
 REPORTS = ROOT / "demo_reports"
 PAX_MASS = 100.0                     # kg per passenger including bags
-N_RANDOM = 20_000                    # random designs for the "nothing beats it" check
+N_RANDOM = 20_000  # random designs for the check
 CONSTRAINT_NAMES = {"mtow": "MTOW", "stall": "stall speed", "fuel_volume": "fuel volume",
                     "mach": "Mach limit", "span": "gate span"}
 
@@ -63,7 +41,6 @@ except Exception:
     pass
 
 
-# ------------------------------------------------------------------ asking questions
 def ask(question, default, lo=None, hi=None, kind=float, use_defaults=False):
     """Ask for a value; Enter keeps the default; asks again on bad input."""
     if use_defaults:
@@ -93,7 +70,6 @@ def folder_name(name):
     return s or "demo"
 
 
-# ------------------------------------------------------------------ helpers
 VAR_LABELS = ("wing area", "aspect ratio", "cruise speed", "cruise fuel", "initial mass")
 
 
@@ -109,8 +85,7 @@ def violated(m, x, tol=1e-6):
 
 
 def random_feasible_designs(p, n, seed=0):
-    """Sample n random wings (S, AR, V, W_i) inside the bounds, compute the fuel from the weight
-    build-up, and keep the designs that satisfy every constraint. Returns (spans, ranges)."""
+    """Random designs inside the bounds that satisfy every constraint; returns (spans, ranges)."""
     rng = np.random.default_rng(seed)
     rp = ReducedProblem(p)
     m = rp.m
@@ -125,7 +100,6 @@ def random_feasible_designs(p, n, seed=0):
     return np.array(spans), np.array(ranges)
 
 
-# ------------------------------------------------------------------ main
 def main(use_defaults=False, name=None):
     print("\n" + "=" * 70)
     print(" AIRCRAFT RANGE OPTIMISER - DEMO MODE")
@@ -150,7 +124,7 @@ def main(use_defaults=False, name=None):
             return
         shutil.rmtree(out)
 
-    p737 = calibrated_params()                     # the 737-800 calibration: the defaults below
+    p737 = calibrated_params()  # 737 defaults
     print("\nA. Requirements and technology")
     pax = ask("number of passengers", 162, 0, 213, int, use_defaults)
     mtow = ask("maximum take-off mass [kg]", p737.MTOW, 60_000, 100_000, use_defaults=use_defaults)
@@ -181,18 +155,14 @@ def main(use_defaults=False, name=None):
         print(f"    unknown solver '{solver}', using bfgs")
         solver = "bfgs"
 
-    # ---------------------------------------------------------------- designs
     t0 = time.perf_counter()
     AR = span ** 2 / S
     x_user = np.array([S, AR, mach * p.a_sound, fuel, m.initial_mass(S, AR, fuel)])
-    # The real 737-800: its own (aluminium) wing, so the 737's k_w even if you chose a lighter
-    # structure; flown with your requirements and as much fuel as its tanks and the MTOW allow.
     p_737wing = p.with_(k_w=p737.k_w)
     x_737 = fly_fixed_geometry(p_737wing, baseline_x(p737), p.W_pay)
     if x_737 is not None:
         x_737[2] = B737["M_cruise"] * p.a_sound
 
-    # ---------------------------------------------------------------- optimise
     print("\nOptimising ...")
     rp = ReducedProblem(p)
     res = solve_alm(rp, rp.z_from_x(x_user), method=solver)
@@ -215,7 +185,6 @@ def main(use_defaults=False, name=None):
         k = kkt_check(p, x_opt)
         checks["kkt"] = {kk: v for kk, v in k.items() if kk not in ("lam_vector", "nu")}
 
-    # ---------------------------------------------------------------- save numbers
     out.mkdir(parents=True, exist_ok=True)
     inputs = dict(name=name, passengers=pax, MTOW_kg=mtow, altitude_ft=alt_ft, engine_factor=engine,
                   max_stall_speed=vstall, max_Mach=mmax, wing_structure_factor=kw,
@@ -239,7 +208,6 @@ def main(use_defaults=False, name=None):
     )
     (out / "results.json").write_text(json.dumps(results, indent=1, default=json_default), encoding="utf-8")
 
-    # ---------------------------------------------------------------- figures
     plt.rcParams.update({"font.size": 9, "axes.grid": True, "grid.alpha": 0.3,
                          "axes.spines.top": False, "axes.spines.right": False})
     hist = results["history"]
@@ -270,7 +238,6 @@ def main(use_defaults=False, name=None):
         ax.legend(loc="lower right", fontsize=8)
         fig.tight_layout(); fig.savefig(out / "fig_random_designs.png", dpi=150); plt.close(fig)
 
-    # ---------------------------------------------------------------- report
     status = build_demo_report(out)
     o = results["optimum"]
     print("\n" + "-" * 70)

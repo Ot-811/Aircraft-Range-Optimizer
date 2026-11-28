@@ -1,5 +1,4 @@
-"""Checks that every published number is entered correctly, that the solvers converge cleanly,
-and that the report builder escapes text for LaTeX."""
+"""Published data, ISA, solver convergence and LaTeX escaping."""
 import math
 
 import numpy as np

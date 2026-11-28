@@ -1,18 +1,4 @@
-"""Augmented Lagrangian method (Powell-Hestenes-Rockafellar) for
-
-    min f(z)  s.t.  c_E(z) = 0,  c_I(z) <= 0
-
-    L_A(z; lam, nu, mu) = f + nu'c_E + mu/2 |c_E|^2
-                          + 1/(2 mu) sum( max(0, lam_i + mu c_I,i)^2 - lam_i^2 )
-
-Outer loop
-  1. minimise L_A over z with one of the hand-written methods (unconstrained.py)
-  2. update the multipliers  nu <- nu + mu c_E,   lam <- max(0, lam + mu c_I)   (keeps lam >= 0)
-  3. if the violation did not drop by a factor 4, increase the penalty  mu <- 10 mu
-  4. stop when violation, complementarity <= tol and the KKT stationarity residual <= 1e-6
-
-At convergence lam and nu are the KKT (Lagrange) multipliers.
-"""
+"""Augmented Lagrangian method (PHR) for min f s.t. c_E = 0, c_I <= 0, with our own inner solvers."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field

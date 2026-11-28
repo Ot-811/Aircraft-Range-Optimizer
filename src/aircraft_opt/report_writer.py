@@ -1,13 +1,4 @@
-"""A very small report builder shared by the main report and the demo report.
-
-A report is a list of blocks (heading, paragraph, bullet list, table, figure). The same list
-is written twice:
-    report.md   Markdown, readable on GitHub / VS Code
-    report.tex  LaTeX, compiled to report.pdf if `pdflatex` is installed (MiKTeX / TeX Live)
-
-Text may use **bold** and `code`. Unicode symbols (², ≤, λ, ...) are translated for LaTeX.
-The reports never contain hand-typed numbers: every number comes from the saved results.
-"""
+"""Small report builder: one list of blocks written as Markdown and as LaTeX/PDF."""
 from __future__ import annotations
 
 import os
@@ -16,7 +7,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-# Unicode -> LaTeX (text mode). Anything not listed and not ASCII is replaced by '?'.
 UNICODE_TO_LATEX = {
     "²": r"\textsuperscript{2}", "³": r"\textsuperscript{3}", "⁻": r"\textsuperscript{-}",
     "¹": r"\textsuperscript{1}", "⁰": r"\textsuperscript{0}", "⁴": r"\textsuperscript{4}",
@@ -68,7 +58,6 @@ class Report:
         self.subtitle = subtitle
         self.blocks = []
 
-    # ------------------------------------------------------------------ building
     def heading(self, text, level=1):
         self.blocks.append(("heading", level, text))
 
@@ -84,7 +73,6 @@ class Report:
     def figure(self, path, caption, width=0.9):
         self.blocks.append(("figure", Path(path), caption, width))
 
-    # ------------------------------------------------------------------ Markdown
     def to_markdown(self, folder: Path) -> str:
         lines = [f"# {self.title}", ""]
         if self.subtitle:
@@ -110,7 +98,6 @@ class Report:
                 lines += [f"![{b[2]}]({rel})", "", f"_{b[2]}_", ""]
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------ LaTeX
     def to_latex(self, folder: Path) -> str:
         L = [r"\documentclass[10pt,a4paper]{article}",
              r"\usepackage[T1]{fontenc}", r"\usepackage{lmodern}", r"\usepackage{amssymb}",
@@ -134,7 +121,6 @@ class Report:
             elif kind == "table":
                 header, rows, caption = b[1], b[2], b[3]
                 n = len(header)
-                # rough width in characters; wide tables get wrapping columns (tabularx)
                 width = sum(max(len(str(r[j])) for r in [header] + rows) for j in range(n)) + 3 * n
                 if width > 105:
                     begin = r"\begin{tabularx}{\textwidth}{l" + r">{\raggedright\arraybackslash}X" * (n - 1) + "}"
@@ -156,10 +142,8 @@ class Report:
         L.append(r"\end{document}")
         return "\n".join(L)
 
-    # ------------------------------------------------------------------ output
     def save(self, folder, stem="report") -> str:
-        """Write <stem>.md and <stem>.tex into folder and try to compile <stem>.pdf.
-        Returns a one-line status message."""
+        """Write <stem>.md and <stem>.tex, try to compile <stem>.pdf, return a status message."""
         folder = Path(folder)
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{stem}.md").write_text(self.to_markdown(folder), encoding="utf-8")

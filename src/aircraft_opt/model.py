@@ -1,18 +1,4 @@
-"""Conceptual aircraft model: Breguet range, drag polar, weight build-up and constraints.
-
-Full design vector x = (S, AR, V, W_fuel, W_i) with S [m^2], V [m/s], weights as masses [kg].
-All functions return analytic gradients / Jacobians.
-
-Objective:   f(x) = -ln R(x),  R = V/c_T * (C_L/C_D) * ln(W_i/(W_i - W_fuel))   [R in km]
-Equality:    h(x) = (W_fixed + k_w S^a AR^b W_i^c + W_fuel + W_res + W_pay)/W_i - 1 = 0
-Inequalities (normalised, g <= 0):
-    mtow         W_i/MTOW - 1
-    stall        (W_i g / S) / (0.5 rho0 V_stall^2 CLmax) - 1
-    fuel_volume  (W_fuel + W_res) sqrt(AR) / (k_f S^1.5) - 1
-    mach         V / (M_max a) - 1
-    span         sqrt(S AR)/b_max - 1          (only if b_max is set)
-plus simple bounds lb <= x <= ub.
-"""
+"""Aircraft model: Breguet range, drag polar, weight build-up, constraints and analytic gradients."""
 from __future__ import annotations
 
 import math
@@ -34,7 +20,6 @@ class AircraftModel:
         self.lb = np.array(p.lb, float)
         self.ub = np.array(p.ub, float)
 
-    # ------------------------------------------------------------------ aero
     def aero(self, x):
         S, AR, V, Wf, Wi = x
         p = self.p
@@ -50,10 +35,7 @@ class AircraftModel:
         return p.k_w * S ** p.a * AR ** p.b * Wi ** p.c
 
     def initial_mass(self, S, AR, W_fuel, iters=50):
-        """W_i that closes the weight build-up for a given wing and fuel load.
-        W_i appears on both sides (the wing gets heavier with W_i), so we iterate
-        W_i <- W_fixed + W_wing(W_i) + W_fuel + W_res + W_pay; it converges quickly because
-        the wing is a small part of the total mass."""
+        """W_i that closes the weight build-up for a given wing and fuel load (fixed-point iteration)."""
         p = self.p
         Wi = p.W_fixed + W_fuel + p.W_res + p.W_pay
         for _ in range(iters):
@@ -64,7 +46,6 @@ class AircraftModel:
         S, AR, V, Wf, Wi = x
         return S > 0 and AR > 0 and V > 0 and 0 < Wf < Wi
 
-    # ------------------------------------------------------------- objective
     def range_km(self, x):
         S, AR, V, Wf, Wi = x
         CL, CD, _ = self.aero(x)
@@ -89,7 +70,6 @@ class AircraftModel:
         g[4] = -dlnE_dCL * (CL / Wi) - (1.0 / B) * (1.0 / Wi - 1.0 / (Wi - Wf))
         return g
 
-    # ----------------------------------------------------------- constraints
     def h(self, x):
         S, AR, V, Wf, Wi = x
         p = self.p
@@ -133,7 +113,6 @@ class AircraftModel:
             J[4, 1] = 0.5 * s / AR
         return J
 
-    # ----------------------------------------------------------------- report
     def describe(self, x):
         S, AR, V, Wf, Wi = map(float, x)
         CL, CD, _ = self.aero(x)

@@ -1,16 +1,4 @@
-"""MAIN STUDY. Runs every study in the proposal and saves the results:
-
-    results/tables/*.csv     every table
-    results/figures/*.png    every figure
-    results/results.json     all numbers the report needs
-    results/report.md/.pdf   the auto-generated report (built by scripts/main_report.py)
-
-    python scripts/run_all.py            # full run (about 1-2 min)
-    python scripts/run_all.py --quick    # fewer sweep points / starts
-
-Computing and reporting are separate: `python scripts/main_report.py` rebuilds the report from
-results/results.json without re-running the optimisation.
-"""
+"""Main study: every study in the proposal -> results/ tables, figures, results.json and report."""
 from __future__ import annotations
 
 import argparse
@@ -31,14 +19,14 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from aircraft_opt.params import calibrated_params, baseline_x, B737, PARAMETER_SOURCES  # noqa: E402
-from aircraft_opt.model import AircraftModel  # noqa: E402
-from aircraft_opt.atmosphere import FT  # noqa: E402
-from aircraft_opt.report_writer import json_default  # noqa: E402
-from aircraft_opt import studies  # noqa: E402
-from main_report import build_main_report  # noqa: E402  (scripts/main_report.py)
+from aircraft_opt.params import calibrated_params, baseline_x, B737, PARAMETER_SOURCES
+from aircraft_opt.model import AircraftModel
+from aircraft_opt.atmosphere import FT
+from aircraft_opt.report_writer import json_default
+from aircraft_opt import studies
+from main_report import build_main_report
 
-try:  # Windows consoles default to cp1252; keep printing Unicode safe
+try:  # UTF-8 output on Windows
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:
     pass
@@ -47,7 +35,6 @@ RES = ROOT / "results"
 TAB = RES / "tables"
 FIG = RES / "figures"
 
-# Fixed colour order and text inks for all figures
 C = ["#257de0", "#f47230", "#00b894", "#d28e05", "#ee7fac", "#008a17", "#6a4ce2", "#ec4647"]
 INK, INK2, GRID = "#191919", "#666666", "#e6e6e6"
 plt.rcParams.update({
@@ -79,9 +66,8 @@ def main(quick=False):
     t0 = time.perf_counter()
     TAB.mkdir(parents=True, exist_ok=True)
     FIG.mkdir(parents=True, exist_ok=True)
-    step = lambda s: print(f"[{time.perf_counter() - t0:5.1f} s] {s}")  # noqa: E731
+    step = lambda s: print(f"[{time.perf_counter() - t0:5.1f} s] {s}")
 
-    # ------------------------------------------------------------ calibration
     step("calibration")
     p_lit = calibrated_params(calibrate_cT=False)
     p = calibrated_params()
@@ -99,7 +85,6 @@ def main(quick=False):
     params = [dict(name=n, description=d, unit=u, value=getattr(p, n) * k, source=s)
               for n, d, u, k, s in PARAMETER_SOURCES]
 
-    # --------------------------------------------------------- main optimum
     step("optimum with and without the 36 m span limit")
     opt = studies.optimize(p)
     p36 = p.with_(b_max=36.0)
@@ -109,7 +94,6 @@ def main(quick=False):
                dict(case="Optimum, 36 m span (ICAO C)", **opt36["design"])]
     write_csv("designs.csv", designs)
 
-    # ---------------------------------------------------- method comparison
     step("method comparison (5 inner solvers + SLSQP, two cases)")
     mc = studies.method_comparison(p)
     mc36 = studies.method_comparison(p36)
@@ -117,31 +101,27 @@ def main(quick=False):
     write_csv("method_comparison_span36.csv", mc36)
     hist = studies.inner_histories(p)
 
-    # -------------------------------------------------- KKT + sensitivities
     step("KKT check and sensitivities")
     kkt, sens = studies.sensitivities(p, opt)
     kkt36, sens36 = studies.sensitivities(p36, opt36)
     write_csv("sensitivities_nospan.csv", sens)
     write_csv("sensitivities_span36.csv", sens36)
-    clean = lambda k: {kk: v for kk, v in k.items() if kk not in ("lam_vector", "nu")}  # noqa: E731
+    clean = lambda k: {kk: v for kk, v in k.items() if kk not in ("lam_vector", "nu")}
     (TAB / "kkt.json").write_text(json.dumps(dict(nospan=clean(kkt), span36=clean(kkt36)), indent=2,
                                           default=json_default), encoding="utf-8")
 
-    # ------------------------------------------------------------ multistart
     step("multi-start")
     ms = studies.multistart(p, n=10 if quick else 40)
     write_csv("multistart.csv", ms)
 
-    # --------------------------------------------------------- payload-range
     step("payload-range")
     pays = np.linspace(0, B737["MZFW"] - B737["OEW"], 7 if quick else 15)
     pr = studies.payload_range(p, opt["x"], pays)
     write_csv("payload_range.csv", pr)
 
-    # ------------------------------------------------------------- sweeps
     step("parameter sweeps")
     n = 5 if quick else 9
-    sweeps = {   # key: (axis label, factor from plotted value to model value, plotted values)
+    sweeps = {  # (label, scale to model value, plotted values)
         "k_w": ("Wing-weight coefficient  k_w / k_w,737", p.k_w, np.linspace(0.6, 1.2, n)),
         "cT": ("Engine TSFC  c_T / c_T,737", p.cT, np.linspace(0.75, 1.1, n)),
         "V_stall_max": ("Max. stall speed [m/s]", 1.0, np.linspace(52, 68, n)),
@@ -155,7 +135,6 @@ def main(quick=False):
         sweep_rows[key] = rows
         write_csv(f"sweep_{key}.csv", rows)
 
-    # ------------------------------------------- extra analyses (within the proposal)
     step("convergence rates, design space, assumption tornado")
     conv = [dict(method=k, **studies.convergence_stats(h[:, 2])) for k, h in hist.items()]
     write_csv("convergence_rates.csv", conv)
@@ -163,9 +142,7 @@ def main(quick=False):
     torn = studies.tornado()
     write_csv("tornado.csv", torn)
 
-    # ================================================================ figures
     step("figures")
-    # 1. baseline vs optimum bar comparison (indexed to baseline = 100)
     fig, ax = plt.subplots(figsize=(7.2, 3.2))
     qty = [("range_km", "Range"), ("S", "Wing area"), ("AR", "Aspect ratio"), ("span", "Span"),
            ("V", "Cruise speed"), ("LD", "L/D"), ("W_wing", "Wing mass"), ("W_fuel", "Trip fuel")]
@@ -182,7 +159,6 @@ def main(quick=False):
     ax.legend(loc="upper left", ncols=2)
     fig.tight_layout(); fig.savefig(FIG / "fig1_design_comparison.png"); plt.close(fig)
 
-    # 2. convergence of inner methods on the same subproblem
     fig, ax = plt.subplots(figsize=(6.4, 3.4))
     for i, (k, h) in enumerate(hist.items()):
         ax.semilogy(h[:, 0], np.maximum(h[:, 2], 1e-16), color=C[i], label=METHOD_NAMES[k],
@@ -197,7 +173,6 @@ def main(quick=False):
     ax.legend(ncols=2)
     fig.tight_layout(); fig.savefig(FIG / "fig2_inner_convergence.png"); plt.close(fig)
 
-    # 3. ALM outer convergence (BFGS)
     fig, ax = plt.subplots(figsize=(6.4, 3.2))
     for i, (rows, lab) in enumerate([(mc, "no span limit"), (mc36, "36 m span")]):
         hh = [r for r in rows if r["method"] == "bfgs"][0]["history"]
@@ -210,7 +185,6 @@ def main(quick=False):
     ax.legend(fontsize=8)
     fig.tight_layout(); fig.savefig(FIG / "fig3_alm_convergence.png"); plt.close(fig)
 
-    # 4. payload-range
     fig, ax = plt.subplots(figsize=(6.4, 3.6))
     pay_t = np.array([r["payload_kg"] for r in pr]) / 1000
     for i, (key, lab) in enumerate([("range_737_km", "737-800 geometry (model)"),
@@ -225,7 +199,6 @@ def main(quick=False):
     ax.legend(loc="lower left")
     fig.tight_layout(); fig.savefig(FIG / "fig4_payload_range.png"); plt.close(fig)
 
-    # 5-8. sweeps
     for idx, (key, (label, _, _)) in enumerate(sweeps.items()):
         rows = sweep_rows[key]
         xv = [r["x_plot"] for r in rows]
@@ -240,7 +213,6 @@ def main(quick=False):
             a_.set_title(ql); a_.set_xlabel(label, fontsize=8)
         fig.tight_layout(); fig.savefig(FIG / f"fig{5 + idx}_sweep_{key}.png"); plt.close(fig)
 
-    # 9. multistart
     fig, ax = plt.subplots(figsize=(6.4, 3.0))
     ra = np.array([r["alm_range_km"] for r in ms]); rs = np.array([r["slsqp_range_km"] for r in ms])
     ax.scatter(range(len(ms)), ra, color=C[0], label="ALM + BFGS (custom)", s=28, zorder=3)
@@ -251,7 +223,6 @@ def main(quick=False):
     ax.legend()
     fig.tight_layout(); fig.savefig(FIG / "fig9_multistart.png"); plt.close(fig)
 
-    # 10. design space: range over (S, AR) with V and W_i at their optimal values
     fig, ax = plt.subplots(figsize=(6.6, 4.4))
     cs = ax.contourf(ds["S"], ds["AR"], ds["range_km"], levels=20, cmap="Blues")
     fig.colorbar(cs, ax=ax, label="Range [km]")
@@ -275,7 +246,6 @@ def main(quick=False):
     ax.grid(False)
     fig.tight_layout(); fig.savefig(FIG / "fig10_design_space.png"); plt.close(fig)
 
-    # 11. tornado: range gain when each assumption changes by -10 % / +10 %
     g0 = 100 * (opt["design"]["range_km"] / base["range_km"] - 1)
     order = sorted(torn, key=lambda r: abs(r["high_gain_pct"] - r["low_gain_pct"]))
     fig, ax = plt.subplots(figsize=(6.4, 2.9))
@@ -290,7 +260,6 @@ def main(quick=False):
     ax.legend(loc="lower right")
     fig.tight_layout(); fig.savefig(FIG / "fig11_tornado.png"); plt.close(fig)
 
-    # ================================================================ save all numbers
     ok = ra[np.isfinite(ra)]
     results = dict(
         meta=dict(date=datetime.now().strftime("%Y-%m-%d %H:%M"), quick=quick,
